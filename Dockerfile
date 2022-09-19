@@ -11,9 +11,7 @@ RUN pip3 --no-cache-dir install \
     scipy                       \
     tqdm
 
-ADD MArtian_Pit_Shadow_extraction /app
+ADD scripts /app
 ADD data /data
-
-RUN mkdir /data/output/
 
 WORKDIR /app
