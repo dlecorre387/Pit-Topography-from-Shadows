@@ -1,3 +1,10 @@
+'''
+Created by Daniel Le Corre (1,2)* on 29/01/2023
+1 - Centre for Astrophysics nd Planetary Science, University of Kent, Canterbury, United Kingdom
+2 - Centres d'Etudes et de Recherches de Grasse, ACRI-ST, Grasse, France
+* Correspondence email: dl387@kent.ac.uk
+'''
+
 import os
 import shutil
 import argparse
