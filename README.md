@@ -1,15 +1,15 @@
-# The **PITS** (**Pi**t **T**opology from **S**hadows) Tool
+# The **PITS** (**Pi**t **T**opography from **S**hadows) Tool
 ## Introduction
 ### What are pits?
 Pits, or pit craters, are near-circular depressions found in planetary surfaces which are generally formed through gravitational collapse. Pits will be primary targets for future space exploration and habitability for their presence on most rocky Solar System surfaces and their potential to be entrances to sub-surface cavities. This is particularly true on Mars, where ice caves are thought to be stable across much of the surface - on which astronauts will also be exposed to high radiation dosages. Since pits are rarely found to have corresponding high-resolution elevation data, tools are required for approximating their depths in order to find those which are the ideal candidates for exploration.
 
 ### How does PITS operate?
 
-The PITS (Pit Topology from Shadows) tool is a dockerised Python framework which can automatically calculate a profile of the apparent depth (*h*) of an extra-terrestrial pit from just one cropped single- or multi-band remote-sensing image. *h* is the relative depth of the pit between its rim and the edge of the shadow cast by the Sun - with the principle being that a deeper pit would cast a wider shadow.
+The PITS (Pit Topography from Shadows) tool is a dockerised Python framework which can automatically calculate a profile of the apparent depth (*h*) of an extra-terrestrial pit from just one cropped single- or multi-band remote-sensing image. *h* is the relative depth of the pit between its rim and the edge of the shadow cast by the Sun - with the principle being that a deeper pit would cast a wider shadow.
 
 PITS does this by employing image segmentation (in the form of unsupervised *k*-means clustering and silhouette analysis for automatic cluster suggestion) in order to produce a binary mask of shadow or non-shadow pixels. Then, by rotating the shadow mask by the solar azimuth angle, PITS can measure the width of the shadow along the Sun's line of sight (*S*) at each pixel in the shadows length. *h* is the derived from these *S* measurements by considering the solar incidence angle for this particular image.
 
-PITS is intended to be used on known/catalogued pits, or as a post-processing tool after pits have been automatically detected perhaps through the use of Machine/Deep Learning. While PITS has so far only been tested upon Mars Reconnaissance Orbiter HiRISE image sof Martian pits, the tool is highly applicable to data from other sensors and other planetary surfaces.
+PITS is intended to be used on known/catalogued pits, or as a post-processing tool after pits have been automatically detected perhaps through the use of Machine/Deep Learning. While PITS has so far only been tested upon Mars Reconnaissance Orbiter HiRISE images of Martian pits, the tool is highly applicable to data from other sensors and other planetary surfaces.
 
 ### Testing Performance
 
@@ -46,7 +46,7 @@ This script is for plotting the apparent depths calculated across the entire ima
 
 ## Usage
 1. Clone the repository
-> `git clone https://github.com/dlecorre387/Pit-Topology-from-Shadows.git`
+> `git clone https://github.com/dlecorre387/Pit-Topography-from-Shadows.git`
 
 2. Copy or move your input files into the correct folders (these folders will be copied when building the docker image in step 3). All input images (cropped or uncropped) should be placed in the **/data/input/** folder. If the input images are not cropped, then the necessary pit location labels should be copied to the **/data/labels/** folder. The metadata .LBL files for each HiRISE image should be placed in the **/data/metadata/** folder. If labels of the shadow(s) have been provided for testing PITS, then they should be placed in the **/data/training/** folder. **NOTE:** You can easily drag and drop new data into the relevant folders once the docker container has already been built by using the 'Docker' extension in Visual Studio Code.
 
