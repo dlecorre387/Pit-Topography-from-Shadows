@@ -1,8 +1,10 @@
 '''
-Created by Daniel Le Corre (1,2)* on 29/01/2023
-1 - Centre for Astrophysics nd Planetary Science, University of Kent, Canterbury, United Kingdom
-2 - Centres d'Etudes et de Recherches de Grasse, ACRI-ST, Grasse, France
-* Correspondence email: dl387@kent.ac.uk
+Created by Daniel Le Corre (1,2)* 
+Last edited on 07/07/2023
+1   Centre for Astrophysics and Planetary Science, University of Kent, Canterbury, United Kingdom
+2   Centres d'Etudes et de Recherches de Grasse, ACRI-ST, Grasse, France
+*   Correspondence: dl387@kent.ac.uk
+    Website: https://www.danlecorre.com/
 '''
 
 import os
@@ -10,9 +12,10 @@ import shutil
 import argparse
 import logging
 import numpy as np
-from osgeo import gdal, ogr
+import matplotlib.pyplot as plt
 from tqdm import tqdm
 from scipy.stats import mode
+from skimage.transform import rotate
 
 # Import PITS functions
 from PITS_functions import *
@@ -23,15 +26,31 @@ logging.basicConfig(level = logging.INFO,
                     datefmt='%d/%m/%y @ %H:%M:%S')
 
 '''
-Optional Parameters:
+Required Parameters:
 
--c (--cropping):    Are you providing MAPS with labels to crop your images down to the pit feature? 
-                    Labels must be equal to or include the name of the corresponding image file 
-                    e.g. label_ESP_033342_1660_RED.shp for image ESP_033342_1660_RED.JP2.
+-d (--dataset):     The name of the dataset whose images will be used to calculate apparent depths.
+                    Currently supported options are "hirise-rdr" (for MRO HiRISE RDR version 1.1 
+                    images of Mars) and "lronac-edr" (for LROC NAC EDR images of the Moon). This 
+                    is required since there is a different process for retrieving sensing 
+                    information for each dataset.
+                    (No default / Type: str)
+
+-c (--cropping):    Crop each larger input image to the extents of the pit feature using user-provided
+                    ESRI shapefile rectangular labels of the pit's location. These shapefiles must 
+                    include or be equal to the full product name of the corresponding image file, e.g. 
+                    label_ESP_033342_1660_RED.shp for the HiRISE image ESP_033342_1660_RED.JP2.
                     (No default / Type: bool)
 
--t (--training):    Are you providing some ground truth labels of pit shadows in order to calibrate
-                    MAPS? 
+Optional Parameters:
+
+-s (--shadows):     Save the aligned detected shadow in each image as a PDF file for viewing. This 
+                    includes the binary shadow mask, but also the detected shadow edge and pit rim 
+                    overlaid upon the input image to serve as a reference for where the shadow width 
+                    was measured between.
+                    (Default: False / Type: bool)
+
+-t (--testing):     Calculate the precision, recall and F1 score of shadow pixel detections in each image 
+                    using user-provided ESRI shapefile labels of the pit's shadow. 
                     (Default: False / Type: bool)
             
 -f (--factor):      The factor by which the cropped input image and labels will be down-scaled when
@@ -41,55 +60,66 @@ Optional Parameters:
 
 DO NOT CHANGE THESE VARIABLES:
 
-CLUSTERS:       The range of k values to iterate over. (Type: list of str)
+CLUSTER_RANGE:  The range of k values to iterate over. 
+                (Type: list of str)
 
-MISS_RATE:      The miss rate of shadow detections. This will be overwritten if training is
-                True with the new average value for your labelled images. (Type: float)
+MISS_RATE:      The miss rate of shadow detections. This will be overwritten if --testing is
+                passed with the new average value for your labelled images. 
+                (Type: float)
 
 FD_RATE:        The false discovery rate of shadow detections. This will be overwritten if 
-                training is True with the new average value for your labelled images. (Type: float)
+                --testing is passed with the new average value for your labelled images. 
+                (Type: float)
 
-INPUT_DIR:      Path to the input images (either cropped or un-cropped). (Type: str)
+INPUT_DIR:      Path to the folder containing input images (either cropped or un-cropped). 
+                (Type: str)
 
-METADATA_DIR:   Path to the HiRISE metadata files containing sensing info. (Type: str)
+METADATA_DIR:   Path to the folder containing the metadata files containing sensing info. 
+                (Type: str)
 
-LABELS_DIR:     Path to the labels used for cropping images down to the pit feature. (Type: str)
+LABELS_DIR:     Path to the folder containing the shapefiles used for cropping images to the pit feature. 
+                (Type: str)
 
-TRAINING_DIR:   Path to the ground truth labels of pit shadows. (Type: str)
+TESTING_DIR:    Path to the folder containing the user-created ground truth shadow shapefiles. 
+                (Type: str)
 
-OUTPUT_DIR:     Path to the output directory where all of the results and plots will be saved. (Type: str)
-
+OUTPUT_DIR:     Path to the output directory where all of the results and plots will be saved. 
+                (Type: str)
 '''
 
-# Initialize arguments parser and define arguments
+# Initialise arguments parser and define arguments
 PARSER = argparse.ArgumentParser()
-PARSER.add_argument("-c", "--cropping", type=bool, help = "Will cropping be required?")
-PARSER.add_argument("-t", "--training", type=bool, default=False, help = "Have shadow labels been provided for testing?")
-PARSER.add_argument("-f", "--factor", type=float, default=0.1, help = "Down-scaling factor for silhouette coefficient calculation")
+PARSER.add_argument("-d", "--dataset", type=str, required=True, help = "Which dataset is being used? ['hirise-rdr'|'lronac-edr']")
+PARSER.add_argument("-c", "--cropping", action=argparse.BooleanOptionalAction, required=True, help = "Do images require cropping to extents of the target feature? [--cropping|--no-cropping]")
+PARSER.add_argument("-s", "--shadows", action=argparse.BooleanOptionalAction, default=False, help = "Should the detected aligned shadows be saved for reference? [--shadows|--no-shadows]")
+PARSER.add_argument("-t", "--testing", action=argparse.BooleanOptionalAction, default=False, help = "Have validation shapefiles been provided for all images to test shadow extraction? [--testing|--no-testing]")
+PARSER.add_argument("-f", "--factor", type=float, default=10, help = "Down-scaling factor for silhouette coefficient calculation [float]")
 ARGS = PARSER.parse_args()
 
 # Do not change these variables
-CLUSTERS = np.arange(4, 14, 1)
-MISS_RATES = [0.00473, 0.00681]
-FD_RATES = [0.06939, 0.08432]
+CLUSTER_RANGE = np.arange(4, 14, 1)
+MISS_RATES = [0.004280421, 0.00611175]
+FD_RATES = [0.052279632, 0.059128667]
 INPUT_DIR = '/data/input/'
 METADATA_DIR = '/data/metadata/'
 LABELS_DIR = '/data/labels/'
-TRAINING_DIR = '/data/training/'
+TESTING_DIR = '/data/testing/'
 OUTPUT_DIR = '/data/output/'
 
-def main(cropping,
-        training,
+def main(dataset,
+        cropping,
+        shadows,
+        testing,
         factor,
-        clusters,
+        cluster_range,
         miss_rates,
         FD_rates,
         input_dir, 
-        metadata_dir, 
+        metadata_dir,
         labels_dir,
-        training_dir,
+        testing_dir,
         output_dir):
-
+    
     # Clean or create output folder
     if os.path.exists(output_dir):
         for file in os.listdir(output_dir):
@@ -101,237 +131,431 @@ def main(cropping,
                     shutil.rmtree(file_path)
             except Exception as e:
                 print('Failed to delete %s. Reason: %s' % (file, e))
+        logging.info(f"Output folder '{output_dir}' cleaned.")
     elif not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    
-    # Create the subfolders to store shadow shapefile, and csv of results
+        logging.info(f"Output folder '{output_dir}' created.")
+       
+    # Create sub-folders for separating, h profiles, shadow shapefiles and other results
+    plots_dir = os.path.join(output_dir, 'figures/')
+    profiles_dir = os.path.join(output_dir, 'profiles/')
     shadows_dir = os.path.join(output_dir, 'shadows/')
-    results_dir = os.path.join(output_dir, 'results/')
-    for subfolder in [shadows_dir, results_dir]:
+    subfolders = [plots_dir, profiles_dir, shadows_dir]
+    for subfolder in subfolders:
         if not os.path.exists(subfolder):
-            os.makedirs(subfolder)
+            try:
+                os.makedirs(subfolder)
+            except Exception as e:
+                print('Failed to create subfolder %s. Reason %s' % (subfolder, e))
+    logging.info(f"Sub-folders created.")
     
-    logging.info("Output folder and sub-folders created/cleaned")
-
-    # List all filenames to be fed through MAPS without .XML files
+    # List all filenames to be analysed without .XML files
     filenames = [file for file in os.listdir(input_dir) if not file.endswith('.xml')]
-
-    logging.info("The following files will be analysed: {}".format(filenames))
     
-    if training:
+    logging.info(f"The following files will be analysed ({len(filenames)} in total):")
+    for file_n, filename in enumerate(filenames):
+        print(f"File {file_n+1}:     {filename}")
 
-        # Set up arrays for storing testing metrics
-        P = np.empty(len(filenames))
-        R = np.empty(len(filenames))
-        F1 = np.empty(len(filenames))
-
-    # Open emtpy arrays to store sensing info and APP results
-    res = np.empty((len(filenames)))
-    inc = np.empty((len(filenames)))
-    azim = np.empty((len(filenames)))
-    em = np.empty((len(filenames)))
-    h_cs = np.empty((len(filenames)))
-    pos_h_cs = np.empty((len(filenames)))
-    neg_h_cs = np.empty((len(filenames)))
-    h_ms = np.empty((len(filenames)))
-    pos_h_ms = np.empty((len(filenames)))
-    neg_h_ms = np.empty((len(filenames)))
+    # Open empty arrays to store sensing info and results
+    resolutions = np.empty((len(filenames)))
+    inc_angles = np.empty((len(filenames)))
+    solar_azim_angles = np.empty((len(filenames)))
+    sc_azim_angles = np.empty((len(filenames)))
+    em_angles = np.empty((len(filenames)))
+    centre_raw_hs = np.empty((len(filenames)))
+    pos_centre_raw_hs = np.empty((len(filenames)))
+    neg_centre_raw_hs = np.empty((len(filenames)))
+    centre_hs = np.empty((len(filenames)))
+    pos_centre_hs = np.empty((len(filenames)))
+    neg_centre_hs = np.empty((len(filenames)))
+    max_raw_hs = np.empty((len(filenames)))
+    pos_max_raw_hs = np.empty((len(filenames)))
+    neg_max_raw_hs = np.empty((len(filenames)))
+    max_hs = np.empty((len(filenames)))
+    pos_max_hs = np.empty((len(filenames)))
+    neg_max_hs = np.empty((len(filenames)))
     
-    # Store the appropriate clusters via silhouette analysis
-    dark_ind = np.empty(len(filenames), dtype=int)
-    silhouette_darkests = np.empty((len(filenames), len(clusters)))
+    # Set up arrays for storing testing metrics
+    if testing:
+        P_shadow = np.empty(len(filenames))
+        R_shadow = np.empty(len(filenames))
+        F1_shadow = np.empty(len(filenames))
+        P_bright = np.empty(len(filenames))
+        R_bright = np.empty(len(filenames))
+        F1_bright = np.empty(len(filenames))
 
-    # Open progress bar to monitor clustering
-    pbar = tqdm(total=len(filenames)*clusters.size, desc='PITS progress')
+    # Open progress bar, store the silhouette coefficients/scores, and find the target k/F1
+    pbar = tqdm(total=len(filenames) * cluster_range.size, desc='Progress')
+    silhouettes = np.empty((len(filenames), len(cluster_range)))
 
     # Loop through each image
     for i, filename in enumerate(filenames):
-
-        # Initialise ImageAnalyser class
-        ImAn = ImageAnalyser(filename=filename,
-                            input_dir=input_dir, 
-                            metadata_dir=metadata_dir,
-                            labels_dir=labels_dir,
-                            training_dir=training_dir,
-                            output_dir=output_dir)
-
-        # Crop the image using provided labels and return geotransform and projection
-        if cropping:
-            cropped_im, geot, proj, n_bands, xsize, ysize = ImAn.crop_image()
-
-        # Read the pre-cropped image
-        elif not cropping:
-            cropped_im, geot, proj, n_bands, xsize, ysize = ImAn.read_cropped_im()
-
-        # Retrieve the correct miss and false discovery rates for the number of bands
-        if n_bands == 1:
-            miss_rate = miss_rates[0]
-            FD_rate = FD_rates[0]
-        elif n_bands > 1:
-            miss_rate = miss_rates[1]
-            FD_rate = FD_rates[1]
-        else:
-            raise ValueError("Number of bands should not be zero.")
+            
+        # Initialise DataPreparer class
+        DataPrep = DataPreparer(filename=filename,
+                                input_dir=input_dir, 
+                                metadata_dir=metadata_dir,
+                                labels_dir=labels_dir,
+                                testing_dir=testing_dir,
+                                output_dir=output_dir)
         
-        # Read in ground truth if training
-        if training:
-            val_array = ImAn.read_ground_truth(cropped_im, n_bands, geot, proj)
-            background = np.where(val_array == 1, 0, 1)
+        if cropping:
+            
+            # Crop the image using provided shapefile labels and return raster information [resolution in m, lat/lon in deg]
+            cropped_image, resolution, min_longitude, max_longitude, min_latitude, max_latitude, geotransform, projection, n_bands, x_size, y_size = DataPrep.crop_image()
 
-        # Open an empty array to store the unsorted labels and number of iterations for each appropriate value of k   
-        labels = np.empty((len(clusters), xsize, ysize))
+            # Retrieve sensing angles at time of acquisition [in radians]
+            inc_angle, solar_azim_angle, sc_azim_angle, phase_angle, em_angle, delta_em_angle, em_angle_par, em_angle_perp = DataPrep.read_metadata(dataset, min_longitude, max_longitude, min_latitude, max_latitude)
+            
+        elif not cropping:
+            
+            # Read the pre-cropped image and return raster information [resolution in m]
+            cropped_image, resolution, geotransform, projection, n_bands, x_size, y_size = DataPrep.read_cropped_im()
+
+            # Retrieve sensing angles at time of acquisition [in radians]
+            inc_angle, solar_azim_angle, sc_azim_angle, phase_angle, em_angle, delta_em_angle, em_angle_par, em_angle_perp = DataPrep.read_metadata(dataset, None, None)
+        
+        # Store metadata in arrays for saving later (converting angles back to degrees)
+        resolutions[i], inc_angles[i], solar_azim_angles[i], sc_azim_angles[i], em_angles[i] = resolution, inc_angle * (180 / np.pi), solar_azim_angle * (180 / np.pi), sc_azim_angle * (180 / np.pi), em_angle * (180 / np.pi)
+        
+        # Open an empty array to store the all the sorted labels for each value of k   
+        all_sorted_labels = np.empty((len(cluster_range), x_size, y_size))
 
         # Loop over different numbers of kmeans clusters and shadow cluster threshold
-        for c, cluster in enumerate(clusters):
+        for c, n_clusters in enumerate(cluster_range):
 
             # Cluster the image and sort the labels for a single-band image
             if n_bands == 1:
                 
-                # Cluster image
-                label = kmeans_clustering(cropped_im, cluster)
-                                
-                # Sort the labels and save the silhouette coefficient
-                sorted_labels, silhouette_darkest = sort_clusters(cropped_im, label, factor)
-                silhouette_darkests[i, c] = silhouette_darkest
-            
+                # Initialise the ShadowExtractor class
+                ShadExt = ShadowExtractor(cropped_image=cropped_image,
+                                        n_clusters=n_clusters,
+                                        factor=factor)
+                
+                # Cluster image so that each pixel is assigned a label
+                labels = ShadExt.kmeans_clustering()
+                
+                # Sort the labels by brightness
+                sorted_labels = ShadExt.sort_clusters(labels)
+                
+                # Calculate and save the average silhouette coefficient for the darkest cluster
+                silhouettes[i, c] = ShadExt.calc_silh_coefficient(sorted_labels)
+                    
             # Cluster and sort the labels of each band in a multi-band image
             elif n_bands > 1:
                 
-                # Store the silhouette coefficient and labels for each band
-                darkests = np.empty(len(filenames))
-                all_labels = np.empty((n_bands, xsize, ysize))
+                # Store the silhouette coefficient/score and labels for each band
+                band_silhouettes = np.empty((n_bands))
+                band_labels = np.empty((n_bands, x_size, y_size))
                 
                 # Loop through each band
-                for band in np.arange(0, n_bands):
+                for band in np.arange(n_bands):
                     
-                    # Cluster the individual band
-                    label = kmeans_clustering(cropped_im[band, :, :], cluster)
+                    # Initialise the ShadowExtractor class
+                    ShadExt = ShadowExtractor(cropped_image=cropped_image[band, :, :],
+                                            n_clusters=n_clusters,
+                                            factor=factor)
                     
-                    # Sort the labels and find the silhouette coefficient for this band
-                    all_labels[band, :, :], silhouette_darkest = sort_clusters(cropped_im, label, factor)
-                    darkests[i] = silhouette_darkest
+                    # Cluster the individual band so that each pixel is assigned a label
+                    labels = ShadExt.kmeans_clustering()
+                    
+                    # Sort the labels for this band by brightness
+                    band_labels[band, :, :] = ShadExt.sort_clusters(labels)
+                    
+                    # Calculate and save the average silhouette coefficient for the darkest cluster
+                    band_silhouettes[band] = ShadExt.calc_silh_coefficient(band_labels[band, :, :])
                 
-                # Average the silhouette coefficients across the bands    
-                silhouette_darkests[i, c] = np.mean(darkests)
+                # Average the silhouette coefficients/scores across the bands
+                silhouettes[i, c] = np.mean(band_silhouettes)
                     
                 # Calculate modal labels if applied to colour images
-                sorted_labels = (mode(all_labels, axis=0).mode).astype(int)
+                sorted_labels = (mode(band_labels, axis=0).mode).astype(int)
             
             else:
                 raise ValueError("Number of bands should not be zero.")
             
             # Store the sorted labels for later and save the number of iterations for this value of k
-            labels[c, :, :] = sorted_labels
-        
+            all_sorted_labels[c, :, :] = sorted_labels
+
+            # Update the progress bar
             pbar.update(1)
 
-        # Find the labels for k which gave the highest silhouette coefficient and F1
-        dark_ind[i] = int(np.argmax(silhouette_darkests[i, :]))
-                
-        # Use the labels which maximised the darkest clusters silhouette coefficient
-        shadow = np.where(labels[dark_ind[i], :, :] == np.amin(labels[dark_ind[i], :, :]), 1, 0)                 
-        shadow = postprocessing(shadow)
+            # Find the labels for k which gave the highest silhouette coefficient/score
+            ind = int(np.argmax(silhouettes[i, :]))
+                    
+            # Use the labels which maximised the darkest clusters silhouette coefficient
+            raw_shadow = np.where(all_sorted_labels[ind, :, :] == np.amin(all_sorted_labels[ind, :, :]), 1, 0)
         
-        # Plot the shadow extraction testing results
-        if training:
+        # Initialise the PostProcessor class
+        PostProc = PostProcessor(shadow=raw_shadow)
+        
+        # Remove all small shadow detections so only the main shadow remains, then detect and fill bright features in shadow mask
+        main_shadow, filled_shadow = PostProc.post_processing()
+        
+        # Compare the detected shadows to the manually-labelled shadow shapefiles to get testing metrics
+        if testing:
             
-            # Calculate the precision, recall and F1 this training sample
-            TP = np.sum(shadow*val_array)
-            FP = np.sum(shadow*background)
-            FN = np.sum(val_array) - np.sum(shadow*val_array)
-            P[i] = TP/(TP + FP)
-            R[i] = TP/(TP + FN)
-            F1[i] = (2*P[i]*R[i])/(P[i] + R[i])
+            # Read in ground truth if testing
+            true_shadow, true_bright = DataPrep.read_ground_truth(n_bands, cropped_image, geotransform, projection)
+        
+            # Calculate the difference between the filled and non-filled shadow to get a mask of any bright features
+            if filled_shadow is not None:
+                bright_features = filled_shadow - main_shadow
+            elif filled_shadow is None:
+                bright_features = np.zeros(main_shadow.shape)  
+                
+            # Initialise ShadowTester class
+            ShadTest = ShadowTester(main_shadow=main_shadow,
+                                    true_shadow=true_shadow,
+                                    bright_features=bright_features,
+                                    true_bright=true_bright)
+        
+            # Calculate and store the precision, recall and F1 scores
+            P_shadow[i], R_shadow[i], F1_shadow[i] = ShadTest.calc_shadow_metrics()
             
             # Use the errors (miss rate and FD rate) calculated by comparing to the ground truth
-            miss_rate = 1 - R[i]
-            FD_rate = 1 - P[i]
-
-        # Retrieve HiRISE metadata
-        resolution, inc_angle, em_angle, azim_angle = ImAn.read_HiRISE_metadata()
-        res[i], inc[i], azim[i], em[i] = resolution, inc_angle, azim_angle, em_angle 
-
-        # Extract the shadow and measure its width at every coordinate
-        x = measure_shadow(shadow, azim_angle, resolution)
-        x = x[x != 0]
-
-        # Define the positive and negative uncertainty bounds for the shadow width
-        pos_x = miss_rate*x
-        neg_x = FD_rate*x
-
-        # Calculate the apparent depth at all points along the shadow
-        h, pos_h, neg_h = calculate_h(x, pos_x, neg_x, inc_angle)
+            miss_rate = 1 - R_shadow[i]
+            FD_rate = 1 - P_shadow[i]
+            
+            # Calculate and store the precision, recall and F1 scores
+            P_bright[i], R_bright[i], F1_bright[i] = ShadTest.calc_bright_metrics()
+            
+        # Don't calculate apparent depths if only testing shadow extraction performance
+        if not testing:
+            
+            # Retrieve the correct miss and false discovery rates for the number of bands
+            if n_bands == 1:
+                miss_rate, FD_rate = miss_rates[0], FD_rates[0]
+            elif n_bands > 1:
+                miss_rate, FD_rate = miss_rates[1], FD_rates[1]
+            else:
+                raise ValueError("Number of bands should not be zero.") 
         
-        # Find the centre and minimum shadow apparent depths
-        m = int(h.size/2)
-        h_cs[i], pos_h_cs[i], neg_h_cs[i] = h[m], pos_h[m], neg_h[m]
-        if len(h == np.amax(h)) == 1:
-            h_ms[i], pos_h_ms[i], neg_h_ms[i] = np.amax(h), pos_h[h == np.amax(h)], neg_h[h == np.amax(h)]
-        else:
-            h_ms[i], pos_h_ms[i], neg_h_ms[i] = np.amax(h), pos_h[h == np.amax(h)][0], neg_h[h == np.amax(h)][0]
-
-        # Save the remaining outputs of the MAPS tool: shadow shapefile and apparent depth profile
-        ImAn.save_outputs(geot, proj, shadow, resolution, x, h, pos_h, neg_h)
+        # If no bright features were found within the shadow mask
+        if filled_shadow is None:
         
+            # Initialise the DepthCalculator class
+            DepCalc = DepthCalculator(shadow_list=[main_shadow],
+                                    resolution=resolution,
+                                    inc_angle=inc_angle,
+                                    em_angle=em_angle,
+                                    em_angle_par=em_angle_par,
+                                    em_angle_perp=em_angle_perp,
+                                    solar_azim_angle=solar_azim_angle,
+                                    phase_angle=phase_angle)
+            
+            # Align the main shadow to the Sun's line of sight
+            aligned_shadow = DepCalc.align_shadow()
+            
+            # Measure the observed shadow widths of the aligned shadow [in m]
+            S_obs, coords, edge, rim = DepCalc.measure_shadow(aligned_shadow)
+            S_obs = S_obs[S_obs != 0]
+            
+            # Save the rotated image with the detected shadow edge and pit rim overlaid
+            if shadows:
+                azim_angle = solar_azim_angle * (180 / np.pi)
+                fig, (ax1, ax2) = plt.subplots(1, 2)
+                ax1.imshow(aligned_shadow, cmap='gray', aspect='equal', interpolation='none')
+                ax1.axis('off')
+                ax1.set_title("Aligned Shadow Mask")
+                if n_bands == 1:
+                    rotated_image = rotate(cropped_image, azim_angle - 180, resize=True, order=0, mode='constant', cval=np.amax(cropped_image))
+                elif n_bands > 1:
+                    rotated_image = rotate(cropped_image[0, :, :], azim_angle - 180, resize=True, order=0, mode='constant', cval=np.amax(cropped_image[0, :, :]))
+                ax2.imshow(rotated_image, cmap='gray', aspect='equal', interpolation='none')
+                ax2.plot(coords, edge, 'r-', linewidth=1, label='Shadow edge')
+                ax2.plot(coords, rim, 'c-', linewidth=1, label='Pit rim')
+                ax2.axis('off')
+                ax2.legend(loc='upper left', bbox_to_anchor=(0, 0), ncol=2, frameon=False)
+                ax2.set_title("Aligned Cropped Input Image")
+                fig.savefig(os.path.join(plots_dir, os.path.splitext(filename)[0] + '.pdf'), bbox_inches='tight')
+            
+            # Calculate the upper and lower bounds of the uncertainty in the observed shadow width [in m]
+            pos_delta_S_obs = miss_rate * S_obs
+            neg_delta_S_obs = FD_rate * S_obs
+            
+        # If there were bright features found within the shadow mask
+        elif filled_shadow is not None:
+            
+            # Initialise the DepthCalculator class
+            DepCalc = DepthCalculator(shadow_list=[main_shadow, filled_shadow],
+                                    resolution=resolution,
+                                    inc_angle=inc_angle,
+                                    em_angle=em_angle,
+                                    em_angle_par=em_angle_par,
+                                    em_angle_perp=em_angle_perp,
+                                    solar_azim_angle=solar_azim_angle,
+                                    phase_angle=phase_angle)
+            
+            # Align the main (non-filled) and filled shadows to the Sun's line of sight
+            aligned_main_shadow, aligned_filled_shadow = DepCalc.align_shadow()
+            
+            # Filter out all shadow pixels which may be caused by bright features within the main shadow
+            aligned_filtered_shadow = DepCalc.remove_bright_features(aligned_main_shadow, aligned_filled_shadow)
+            
+            # Measure the observed shadow widths of the filtered shadow [in m]
+            S_obs_filtered, coords_filtered, edge_filtered, rim_filtered = DepCalc.measure_shadow(aligned_filtered_shadow)
+            
+            # Measure the observed shadow widths of the filled shadow [in m]
+            S_obs_filled, coords_filled, edge_filled, rim_filled = DepCalc.measure_shadow(aligned_filled_shadow)
+            
+            # Find and remove elements where both of the filtered and filled observed width measurements are zero
+            zero_filter = np.logical_and(S_obs_filtered != 0, S_obs_filled != 0)
+            S_obs_filtered = S_obs_filtered[zero_filter]
+            S_obs_filled = S_obs_filled[zero_filter]
+            
+            # Calculate the average of the filled and filtered observed shadow widths [in m]
+            S_obs = (S_obs_filled + S_obs_filtered) / 2
+            
+            # Calculate the upper and lower bounds of the averaged observed shadow width [in m]
+            pos_delta_S_obs = np.maximum(S_obs_filled, S_obs_filtered) - S_obs + (S_obs * miss_rate)
+            neg_delta_S_obs = S_obs - np.minimum(S_obs_filled, S_obs_filtered) + (S_obs * FD_rate)                
+            
+            # Save the rotated image with the detected filtered/filled shadow edge and pit rim overlaid
+            if shadows:
+                azim_angle = solar_azim_angle * (180 / np.pi)
+                fig, (ax1, ax2) = plt.subplots(1, 2)
+                ax1.imshow(aligned_filtered_shadow, cmap='gray', aspect='equal', interpolation='none')
+                ax1.axis('off')
+                ax1.set_title("Aligned Shadow Mask")
+                if n_bands == 1:
+                    rotated_image = rotate(cropped_image, azim_angle - 180, resize=True, order=0, mode='constant', cval=np.amax(cropped_image))
+                elif n_bands > 1:
+                    rotated_image = rotate(cropped_image[0, :, :], azim_angle - 180, resize=True, order=0, mode='constant', cval=np.amax(cropped_image[0, :, :]))
+                ax2.imshow(rotated_image, cmap='gray', aspect='equal', interpolation='none')
+                ax2.plot(coords_filled, edge_filled, 'r-', linewidth=1, label='Shadow edge (filled)')
+                ax2.plot(coords_filtered, edge_filtered, 'r--', linewidth=1, label='Shadow edge (filtered)')
+                ax2.plot(coords_filled, rim_filled, 'c-', linewidth=1, label='Pit rim (filled)')
+                ax2.plot(coords_filtered, rim_filtered, 'c--', linewidth=1, label='Pit rim (filtered)')
+                ax2.axis('off')
+                ax2.legend(loc='upper left', bbox_to_anchor=(0, 0), ncol=2, frameon=False)
+                ax2.set_title("Aligned Cropped Input Image")
+                fig.savefig(os.path.join(plots_dir, os.path.splitext(filename)[0] + '.pdf'), bbox_inches='tight')
+                
+        # Calculate the observed apparent depth before correcting the shadow width [in m]
+        h_obs = DepCalc.calculate_h(S_obs)
+        
+        # Calculate the observed length of the shadow [in m]
+        L_obs = resolution * np.arange(0, S_obs.size)
+        
+        # Find the true shadow width and length by correcting for the satellite emission angle [in m]
+        S_true, L_true = DepCalc.correct_shadow_width(S_obs, L_obs)
+        
+        # Calculate the true apparent depth now that the width has been corrected [in m]
+        h_true = DepCalc.calculate_h(S_true)
+        
+        # Propagate the uncertainties in S_obs and the emission angle to h_obs and h_true
+        pos_delta_h_obs, neg_delta_h_obs, pos_delta_h_true, neg_delta_h_true = DepCalc.propagate_uncertainties(S_obs, pos_delta_S_obs, neg_delta_S_obs, delta_em_angle)
+        
+        # Save the apparent depth profile as a CSV file for plotting later
+        DataPrep.save_h_profile(L_obs, h_obs, pos_delta_h_obs, neg_delta_h_obs, L_true, h_true, pos_delta_h_true, neg_delta_h_true)
+        
+        # Save the shadow as a geo-referenced shapefile
+        DataPrep.save_shadow(main_shadow, geotransform, projection, h_true)
+        
+        # Find the centre observed and true apparent depths to add to the results table
+        ind = int(h_obs.size / 2)
+        centre_raw_hs[i], pos_centre_raw_hs[i], neg_centre_raw_hs[i] = h_obs[ind], pos_delta_h_obs[ind], neg_delta_h_obs[ind]
+        centre_hs[i], pos_centre_hs[i], neg_centre_hs[i] = h_true[ind], pos_delta_h_true[ind], neg_delta_h_true[ind]
+        
+        # Find the maximum observed and true apparent depths to add to the results table
+        max_raw_hs[i], pos_max_raw_hs[i], neg_max_raw_hs[i] = np.amax(h_obs), np.amax(pos_delta_h_obs), np.amax(neg_delta_h_obs)
+        max_hs[i], pos_max_hs[i], neg_max_hs[i] = np.amax(h_true), np.amax(pos_delta_h_true), np.amax(neg_delta_h_true)
+                
     pbar.close()
 
-    # Save the training results to a csv file
+    # Save testing performances
+    if testing:
+        
+        logging.info("Shadow extraction performance metrics:")
+        logging.info("Average miss rate: {}".format(1 - np.mean(R_shadow)))
+        logging.info("Average false discovery rate: {}".format(1 - np.mean(P_shadow)))
+        logging.info("Average F1 score: {}".format(np.mean(F1_shadow)))
+        
+        logging.info("Bright feature detection performance metrics:")
+        logging.info("Average miss rate: {}".format(1 - np.mean(R_bright)))
+        logging.info("Average false discovery rate: {}".format(1 - np.mean(P_bright)))
+        logging.info("Average F1 score: {}".format(np.mean(F1_bright)))
+        
+        # Store testing results in a structured array
+        dt = np.dtype([('i', 'U32'),
+                    ('P_shadow', float), ('R_shadow', float), ('F1_shadow', float),
+                    ('P_bright', float), ('R_bright', float), ('F1_bright', float)])
+        array = np.empty(len(filenames), dtype=dt)
+        
+        # Store the filenames, and the corresponding testing metrics
+        array['i'] = [os.path.splitext(filename)[0] for filename in filenames]
+        array['P_shadow'] = P_shadow
+        array['R_shadow'] = R_shadow
+        array['F1_shadow'] = F1_shadow
+        array['P_bright'] = P_bright
+        array['R_bright'] = R_bright
+        array['F1_bright'] = F1_bright
+        
+        # Save to a csv file with appropriate headers for reference
+        np.savetxt(os.path.join(output_dir, 'PITS_testing.csv'), 
+                array,
+                delimiter=',',
+                fmt='%s, %f, %f, %f, %f, %f, %f',
+                header='Image Name, P (Shadow), R (Shadow), F1 (Shadow), P (B Spots), R (B Spots), F1 (B Spots)')       
+        
+    # Store results and image information in a structured array
     dt = np.dtype([('filename', 'U32'),
-                    ('res', float), ('inc', float), ('azim', float), ('em', float),
+                    ('res', float), ('inc', float), ('s_azim', float), ('em', float), ('sc_azim', float),
+                    ('raw_h_c', float), ('pos_raw_h_c', float), ('neg_raw_h_c', float),
                     ('h_c', float), ('pos_h_c', float), ('neg_h_c', float), 
+                    ('raw_h_m', float), ('pos_raw_h_m', float), ('neg_raw_h_m', float),
                     ('h_m', float), ('pos_h_m', float), ('neg_h_m', float)])
     array = np.empty(len(filenames), dtype=dt)
+    
+    # Store filenames and sensing information
     array['filename'] = [os.path.splitext(filename)[0] for filename in filenames]
-    array['res'] = res
-    array['inc'] = inc
-    array['azim'] = azim
-    array['em'] = em
-    array['h_c'] = h_cs
-    array['pos_h_c'] = pos_h_cs
-    array['neg_h_c'] = neg_h_cs
-    array['h_m'] = h_ms
-    array['pos_h_m'] = pos_h_ms
-    array['neg_h_m'] = neg_h_ms
+    array['res'] = resolutions
+    array['inc'] = inc_angles
+    array['s_azim'] = solar_azim_angles
+    array['em'] = em_angles
+    array['sc_azim'] = sc_azim_angles
+    
+    # Store the uncorrected apparent depths (and uncertainties) at the shadow's centre
+    array['raw_h_c'] = centre_raw_hs
+    array['pos_raw_h_c'] = pos_centre_raw_hs
+    array['neg_raw_h_c'] = neg_centre_raw_hs
+    
+    # Store the corrected apparent depths (and uncertainties) at the shadow's centre
+    array['h_c'] = centre_hs
+    array['pos_h_c'] = pos_centre_hs
+    array['neg_h_c'] = neg_centre_hs
+    
+    # Store the uncorrected maximum apparent depths (and uncertainties)
+    array['raw_h_m'] = max_raw_hs
+    array['pos_raw_h_m'] = pos_max_raw_hs
+    array['neg_raw_h_m'] = neg_max_raw_hs
+    
+    # Store the corrected maximum apparent depths (and uncertainties)
+    array['h_m'] = max_hs
+    array['pos_h_m'] = pos_max_hs
+    array['neg_h_m'] = neg_max_hs
 
-    # Save to a csv file for reading later
-    np.savetxt(os.path.join(results_dir, 'PITS_results.csv'), 
+    # Save to a csv file with appropriate headers for reference
+    np.savetxt(os.path.join(output_dir, 'PITS_results.csv'), 
             array,
             delimiter=',',
-            fmt='%s, %f, %f, %f, %f, %f, %f, %f, %f, %f, %f',
-            header='Image Name, Resolution [m], Solar Incidence Angle [deg], Solar Azimuth Angle [deg], Emission Angle [deg], Centre h [m], +, -, Maximum h [m], +, -')
+            fmt='%s, %f, %f, %f, %f, %f, %f, %f, %f, %f, %f, %f, %f, %f, %f, %f, %f, %f',
+            header='Image Name, Resolution [m], Incidence Angle [deg], Solar Azimuth Angle [deg], Emission Angle [deg], Spacecraft Azimuth Angle [deg], Uncorrected Centre h [m], +, -, Centre h [m], +, -, Uncorrected Maximum h [m], +, -, Maximum h [m], +, -')
 
     logging.info("All {} images analysed and outputs saved to {}".format(len(filenames), output_dir))
 
-    if training:
-                
-        logging.info("Average miss rate: {}".format(1 - np.mean(R)))
-        logging.info("Average false discovery rate: {}".format(1 - np.mean(P)))
-        logging.info("Average F1 score: {}".format(np.mean(F1)))
-        
-        dt = np.dtype([('i', 'U32'),
-                    ('k', float), ('P', float), ('R', float), ('F1', float)])
-        array = np.empty(len(filenames), dtype=dt)
-        array['i'] = [os.path.splitext(filename)[0] for filename in filenames]
-        array['k'] = [clusters[i] for i in dark_ind]
-        array['P'] = P
-        array['R'] = R
-        array['F1'] = F1
-
-        np.savetxt(os.path.join(results_dir, 'PITS_testing_results.csv'), 
-                array,
-                delimiter=',',
-                fmt='%s, %f, %f, %f, %f',
-                header='Image Name, k, P [%], R [%], F1 [%]')
-
 if __name__ == "__main__":
-    main(ARGS.cropping,
-        ARGS.training,
+    main(ARGS.dataset,
+        ARGS.cropping,
+        ARGS.shadows,
+        ARGS.testing,
         ARGS.factor,
-        CLUSTERS,
+        CLUSTER_RANGE,
         MISS_RATES,
         FD_RATES,
         INPUT_DIR,
         METADATA_DIR,
         LABELS_DIR,
-        TRAINING_DIR,
+        TESTING_DIR,
         OUTPUT_DIR)
