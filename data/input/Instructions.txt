@@ -1,0 +1,23 @@
+INSTRUCTIONS FOR ACQUIRING MRO HIRISE IMAGE(S) FOR PITS TUTORIAL:
+
+Go to the Mars Orbital Data Explorer (ODE) at https://ode.rsl.wustl.edu/mars/
+
+This is a web service provided by NASA's Planetary Data System Geosciences Node for acquiring various types of remote-sensing data taken of Mars by NASA and other partner agencies' missions.
+
+STEP 1. SELECT DATA SETS TO SEARCH:
+
+Go to "Data Product Search" then click on the "Mars Reconnaissance Orbiter" > "HiRISE - High Resolution Imaging Science Experiment" > "Derived Data" drop-down menus and tick the "Reduced Data Record with Embedded Map Projection (RDRV11)" option. This will allow us to only search for MRO HiRISE RDRV11 images which have already been calibrated and map-projected.
+
+STEP 2. SET ADDITIONAL FILTERING PARAMETERS:
+
+Next, click on the "Filter by Product ID" drop-down menu and type into the field - ESP_033342_1660*. This will search for the red and colour versions of the HiRISE image "ESP_033342_1660". Clicking the "Preview Search Results Summary" button should reveal a search results count of 2. Click the "View Results in Table" button to view the resulting images and add all to cart.
+
+STEP 3. DOWNLOAD IMAGES:
+
+From the Search Results window, click on the "Download" tab at the top of the screen. This will show the two images in the download cart (~1.44 GB in total). These images can be downloaded directly through the browser by continuing with the checkout, but using wget is much quicker.
+
+STEP 4. USE WGET TO DOWNLOAD (OPTIONAL):
+
+Click on the "Advanced user options" link at the bottom of the screen and download the text product list. This list will include a lot of unnecessary links to files that can be deleted. The only needed ones are the links that end with "ESP_033342_1660_RED.JP2" and "ESP_033342_1660_COLOR.JP2".
+
+Run "wget -i ODECartFiles.txt" in the command line within the same directory as the text product list "ODECartFiles.txt". This will download the images directly from their location in PDS.

@@ -88,3 +88,6 @@ Optional arguments in `PITS_plotter.py` are:
 
 8. Run the `PITS_plotter.py` script to plot the *h* profiles calculated for each image. To do this, without plotting the uncorrected *h* profile, run the following line in the terminal window.
 > `python PITS_plotter.py`
+
+## Acknowledgements
+This project is part of the Europlanet 2024 RI which has received funding from the European Union’s Horizon 2020 research and innovation programme under grant agreement No 871149.

@@ -5,6 +5,11 @@ Last edited on 07/07/2023
 2   Centres d'Etudes et de Recherches de Grasse, ACRI-ST, Grasse, France
 *   Correspondence: dl387@kent.ac.uk
     Website: https://www.danlecorre.com/
+    
+This project is part of the Europlanet 2024 RI which has received
+funding from the European Union’s Horizon 2020 research and innovation
+programme under grant agreement No 871149.
+
 '''
 
 import os
@@ -223,7 +228,7 @@ class DataPreparer(object):
             metadata_path = os.path.join(self.metadata_dir, 'RDRCUMINDEX.TAB')
             
             # Read in the product names from the metadata file to find the relevant row
-            product_names = np.genfromtxt(metadata_path, delimiter=',', usecols=5, unpack=True, autostrip=True, dtype=str)
+            product_names = np.genfromtxt(metadata_path, delimiter=',', usecols=5, unpack=True, autostrip=True, dtype=str, ndmin=1)
             
             # Remove quotes and whitespace from product names
             for p in np.arange(product_names.size):
@@ -242,7 +247,8 @@ class DataPreparer(object):
                                                                                                                     usecols=(19,20,24,25,26,29,30),
                                                                                                                     skip_header=index, 
                                                                                                                     max_rows=1, 
-                                                                                                                    dtype=float)
+                                                                                                                    dtype=float, 
+                                                                                                                    ndmin=1)
             
                 # Convert min/max image lon coords to a 0/360 domain if in -180/180
                 if max_longitude < 0:
@@ -259,7 +265,8 @@ class DataPreparer(object):
                                                                                                                                                                             usecols=(19,20,24,25,26,29,30,35,36,37,38),
                                                                                                                                                                             skip_header=index, 
                                                                                                                                                                             max_rows=1, 
-                                                                                                                                                                            dtype=float)
+                                                                                                                                                                            dtype=float,
+                                                                                                                                                                            ndmin=1)
             
             # Calculate the solar azimuth angle from due-North [in radians]
             if north_azim_angle > solar_azim_angle:
@@ -283,7 +290,7 @@ class DataPreparer(object):
             metadata_path = os.path.join(self.metadata_dir, 'CUMINDEX.TAB')
             
             # Read in the product names from the metadata file to find the relevant row
-            product_names = np.genfromtxt(metadata_path, delimiter=',', usecols=5, unpack=True, autostrip=True, dtype=str)
+            product_names = np.genfromtxt(metadata_path, delimiter=',', usecols=5, unpack=True, autostrip=True, dtype=str, ndmin=1)
             
             # Remove quotes and whitespace from product names
             for p in np.arange(product_names.size):
@@ -302,7 +309,8 @@ class DataPreparer(object):
                                                                                                                     usecols=(58,59,61,62,65,66,80),
                                                                                                                     skip_header=index, 
                                                                                                                     max_rows=1, 
-                                                                                                                    dtype=float)
+                                                                                                                    dtype=float,
+                                                                                                                    ndmin=1)
                 
                 # Convert min/max image lon coords to a 0/360 domain if in -180/180
                 if max_longitude < 0:
@@ -319,7 +327,8 @@ class DataPreparer(object):
                                                                                                                                                                                             usecols=(58,59,61,62,65,66,71,72,73,74,75,76,77,78,80),
                                                                                                                                                                                             skip_header=index, 
                                                                                                                                                                                             max_rows=1, 
-                                                                                                                                                                                            dtype=float)
+                                                                                                                                                                                            dtype=float, 
+                                                                                                                                                                                            ndmin=1)
             
                 # Calculate the min/max lat/lon from the coords of the 4 corners
                 max_latitude = max(u_r_lat, u_l_lat)

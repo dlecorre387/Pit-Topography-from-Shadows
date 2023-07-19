@@ -5,6 +5,11 @@ Last edited on 07/07/2023
 2   Centres d'Etudes et de Recherches de Grasse, ACRI-ST, Grasse, France
 *   Correspondence: dl387@kent.ac.uk
     Website: https://www.danlecorre.com/
+    
+This project is part of the Europlanet 2024 RI which has received
+funding from the European Union’s Horizon 2020 research and innovation
+programme under grant agreement No 871149.
+
 '''
 
 import os
@@ -280,11 +285,11 @@ def main(dataset,
             # Update the progress bar
             pbar.update(1)
 
-            # Find the labels for k which gave the highest silhouette coefficient/score
-            ind = int(np.argmax(silhouettes[i, :]))
-                    
-            # Use the labels which maximised the darkest clusters silhouette coefficient
-            raw_shadow = np.where(all_sorted_labels[ind, :, :] == np.amin(all_sorted_labels[ind, :, :]), 1, 0)
+        # Find the labels for k which gave the highest silhouette coefficient/score
+        ind = int(np.argmax(silhouettes[i, :]))
+                
+        # Use the labels which maximised the darkest clusters silhouette coefficient
+        raw_shadow = np.where(all_sorted_labels[ind, :, :] == np.amin(all_sorted_labels[ind, :, :]), 1, 0)
         
         # Initialise the PostProcessor class
         PostProc = PostProcessor(shadow=raw_shadow)

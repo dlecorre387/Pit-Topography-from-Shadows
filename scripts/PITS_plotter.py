@@ -5,6 +5,11 @@ Last edited on 07/07/2023
 2   Centres d'Etudes et de Recherches de Grasse, ACRI-ST, Grasse, France
 *   Correspondence: dl387@kent.ac.uk
     Website: https://www.danlecorre.com/
+    
+This project is part of the Europlanet 2024 RI which has received
+funding from the European Union’s Horizon 2020 research and innovation
+programme under grant agreement No 871149.
+
 '''
 
 import os
@@ -67,9 +72,6 @@ def main(raw,
     
         # Find the maximum apparent depth
         max_depth = max(np.amax(h_true) + pos_h_true[np.argmax(h_true)], np.amax(h_obs) + pos_h_obs[np.argmax(h_obs)])
-    
-        # Find the ratio to scale the x and y axis by
-        ratio = max_depth / (L_true[-1] - L_true[0])
         fig, ax = plt.subplots(figsize=(5,5))
         ax.set_aspect('equal')
         
