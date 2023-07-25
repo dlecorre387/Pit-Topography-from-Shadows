@@ -1,6 +1,6 @@
 '''
 Created by Daniel Le Corre (1,2)* 
-Last edited on 07/07/2023
+Last edited on 21/07/2023
 1   Centre for Astrophysics and Planetary Science, University of Kent, Canterbury, United Kingdom
 2   Centres d'Etudes et de Recherches de Grasse, ACRI-ST, Grasse, France
 *   Correspondence: dl387@kent.ac.uk
@@ -48,6 +48,11 @@ Required Parameters:
 
 Optional Parameters:
 
+-p (--path):        Path to the directory containing the necessary input data for the tool to run. 
+                    This directory should contain four folders called: 'input', 'metadata', 'labels'
+                    and 'testing'. The meaning of these is explained in PITS' GitHub repository.
+                    (Default: '/data/' / Type: str)
+
 -s (--shadows):     Save the aligned detected shadow in each image as a PDF file for viewing. This 
                     includes the binary shadow mask, but also the detected shadow edge and pit rim 
                     overlaid upon the input image to serve as a reference for where the shadow width 
@@ -75,27 +80,13 @@ MISS_RATE:      The miss rate of shadow detections. This will be overwritten if 
 FD_RATE:        The false discovery rate of shadow detections. This will be overwritten if 
                 --testing is passed with the new average value for your labelled images. 
                 (Type: float)
-
-INPUT_DIR:      Path to the folder containing input images (either cropped or un-cropped). 
-                (Type: str)
-
-METADATA_DIR:   Path to the folder containing the metadata files containing sensing info. 
-                (Type: str)
-
-LABELS_DIR:     Path to the folder containing the shapefiles used for cropping images to the pit feature. 
-                (Type: str)
-
-TESTING_DIR:    Path to the folder containing the user-created ground truth shadow shapefiles. 
-                (Type: str)
-
-OUTPUT_DIR:     Path to the output directory where all of the results and plots will be saved. 
-                (Type: str)
 '''
 
 # Initialise arguments parser and define arguments
 PARSER = argparse.ArgumentParser()
 PARSER.add_argument("-d", "--dataset", type=str, required=True, help = "Which dataset is being used? ['hirise-rdr'|'lronac-edr']")
 PARSER.add_argument("-c", "--cropping", action=argparse.BooleanOptionalAction, required=True, help = "Do images require cropping to extents of the target feature? [--cropping|--no-cropping]")
+PARSER.add_argument("-p", "--path", type=str, default='/data/', help = "Where is the directory to your input data? ['/path/to/data/']")
 PARSER.add_argument("-s", "--shadows", action=argparse.BooleanOptionalAction, default=False, help = "Should the detected aligned shadows be saved for reference? [--shadows|--no-shadows]")
 PARSER.add_argument("-t", "--testing", action=argparse.BooleanOptionalAction, default=False, help = "Have validation shapefiles been provided for all images to test shadow extraction? [--testing|--no-testing]")
 PARSER.add_argument("-f", "--factor", type=float, default=10, help = "Down-scaling factor for silhouette coefficient calculation [float]")
@@ -105,25 +96,27 @@ ARGS = PARSER.parse_args()
 CLUSTER_RANGE = np.arange(4, 14, 1)
 MISS_RATES = [0.004280421, 0.00611175]
 FD_RATES = [0.052279632, 0.059128667]
-INPUT_DIR = '/data/input/'
-METADATA_DIR = '/data/metadata/'
-LABELS_DIR = '/data/labels/'
-TESTING_DIR = '/data/testing/'
-OUTPUT_DIR = '/data/output/'
 
 def main(dataset,
         cropping,
+        path,
         shadows,
         testing,
         factor,
         cluster_range,
         miss_rates,
-        FD_rates,
-        input_dir, 
-        metadata_dir,
-        labels_dir,
-        testing_dir,
-        output_dir):
+        FD_rates):
+    
+    # Check that the input data directory exists
+    if not os.path.exists(path):
+        raise OSError(f"Input directory '{path}' does not exist or could not be found.")
+    
+    # Define the input data directories
+    input_dir = os.path.join(path, 'input/')
+    metadata_dir = os.path.join(path, 'metadata/')
+    labels_dir = os.path.join(path, 'labels/')
+    testing_dir = os.path.join(path, 'testing/')
+    output_dir = os.path.join(path, 'output/')
     
     # Clean or create output folder
     if os.path.exists(output_dir):
@@ -553,14 +546,10 @@ def main(dataset,
 if __name__ == "__main__":
     main(ARGS.dataset,
         ARGS.cropping,
+        ARGS.path,
         ARGS.shadows,
         ARGS.testing,
         ARGS.factor,
         CLUSTER_RANGE,
         MISS_RATES,
-        FD_RATES,
-        INPUT_DIR,
-        METADATA_DIR,
-        LABELS_DIR,
-        TESTING_DIR,
-        OUTPUT_DIR)
+        FD_RATES)

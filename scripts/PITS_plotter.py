@@ -26,6 +26,10 @@ logging.basicConfig(level = logging.INFO,
 '''
 Optional arguments:
 
+-p (--path):    Path to the folder containing the unedited outputs of the PITS tool. This
+                directory should contain three folders called: 'figures', 'shadows', 'profiles'
+                (Default: '/data/output/' / Type: str)
+
 -r (--raw):     Plot the raw apparent depth measurements which have not been corrected for a non-zero
                 satellite emission angle at the time when the image was taken.
                 (Default: False / Type: bool)
@@ -38,14 +42,16 @@ OUTPUT_DIR:     Path to the output directory where all of the results and plots 
 
 # Initialise arguments parser and define arguments
 PARSER = argparse.ArgumentParser()
+PARSER.add_argument("-o", "--outputpath", type=str, default='/data/output/', help = "Where is the directory to your output data? ['/path/to/output/data/']")
 PARSER.add_argument("-r", "--raw", action=argparse.BooleanOptionalAction, default=False, help = "Should the observed apparent depths also be plotted? [--raw|--no-raw]")
 ARGS = PARSER.parse_args()
 
-# Do not change these variables
-OUTPUT_DIR = '/data/output/'
-
 def main(raw,
         output_dir):
+    
+    # Check that the output directory exists
+    if not os.path.exists(output_dir):
+        raise OSError(f"Output directory '{output_dir}' does not exist or could not be found.")
     
     # Create the directory to save plots
     plots_dir = os.path.join(output_dir, 'figures/')
@@ -55,14 +61,14 @@ def main(raw,
     
     # Define the directory where the h profiles should be saved
     profiles_dir = os.path.join(output_dir, 'profiles/')
-        
+    
     # Find all h profile CSV files
     filenames = [file for file in os.listdir(profiles_dir) if file.endswith('profile.csv')]
     
     for filename in filenames:
         
         # Get product name of file
-        name = os.path.splitext(filename)[0]
+        name = os.path.splitext(filename)[0].replace('_profile','')
         
         # Define the path to the h profile CSV file
         profile_path = os.path.join(profiles_dir, filename)
@@ -85,21 +91,21 @@ def main(raw,
         ax.fill_between(L_true, h_true - neg_h_true, h_true + pos_h_true, alpha=0.4, color='green', label=r'$\Delta h$')
 
         # Format the axes
-        ax.set_xlabel(r"Shadow Length ($L$) [m]")
+        ax.set_xlabel(r"Shadow length ($L$) [m]")
         ax.set_ylabel(r"Apparent depth ($h$) [m]")
+        ax.set_title(f"Apparent Depth Profile\nfor {name}")
         ax.set_ylim(0, np.ceil(max_depth/10)*10)
         ax.invert_yaxis()
-        ax.grid('both')
         if raw:
-            ax.legend(loc='lower left', bbox_to_anchor=(0, 1), ncol=4, frameon=False)
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.2), ncol=4, frameon=False)
             ax.set_xlim(min(L_obs[0], L_true[0]), max(L_obs[-1], L_true[-1]))
         else:
-            ax.legend(loc='lower left', bbox_to_anchor=(0, 1), ncol=2, frameon=False)
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.2), ncol=2, frameon=False)
             ax.set_xlim(L_true[0], L_true[-1])
 
         # Save the figure to the output path
-        fig.savefig(os.path.join(plots_dir, name + '.pdf'), bbox_inches='tight')
+        fig.savefig(os.path.join(plots_dir, name + '_profile.pdf'), bbox_inches='tight')
     
 if __name__ == '__main__':
     main(ARGS.raw,
-        OUTPUT_DIR)
+        ARGS.outputpath)

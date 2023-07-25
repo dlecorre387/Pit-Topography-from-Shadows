@@ -1,6 +1,6 @@
 '''
 Created by Daniel Le Corre (1,2)* 
-Last edited on 07/07/2023
+Last edited on 21/07/2023
 1   Centre for Astrophysics and Planetary Science, University of Kent, Canterbury, United Kingdom
 2   Centres d'Etudes et de Recherches de Grasse, ACRI-ST, Grasse, France
 *   Correspondence: dl387@kent.ac.uk
@@ -131,6 +131,7 @@ class DataPreparer(object):
             
             # Get the number of bands in the cropped image
             n_bands = dataset.RasterCount
+            n_bands = int(n_bands)
             
             # If the cropped image is multi-spectral (i.e. more than one raster band)
             if n_bands > 1:
@@ -261,12 +262,12 @@ class DataPreparer(object):
             
                 # Read in the metadata for this particular MRO HiRISE image
                 em_angle, inc_angle, sc_distance, north_azim_angle, solar_azim_angle, sc_latitude, sc_longitude, min_latitude, max_latitude, min_longitude, max_longitude = np.genfromtxt(metadata_path,
-                                                                                                                                                                            delimiter=',', 
-                                                                                                                                                                            usecols=(19,20,24,25,26,29,30,35,36,37,38),
-                                                                                                                                                                            skip_header=index, 
-                                                                                                                                                                            max_rows=1, 
-                                                                                                                                                                            dtype=float,
-                                                                                                                                                                            ndmin=1)
+                            delimiter=',', 
+                            usecols=(19,20,24,25,26,29,30,35,36,37,38),
+                            skip_header=index, 
+                            max_rows=1, 
+                            dtype=float,
+                            ndmin=1)
             
             # Calculate the solar azimuth angle from due-North [in radians]
             if north_azim_angle > solar_azim_angle:
@@ -290,7 +291,7 @@ class DataPreparer(object):
             metadata_path = os.path.join(self.metadata_dir, 'CUMINDEX.TAB')
             
             # Read in the product names from the metadata file to find the relevant row
-            product_names = np.genfromtxt(metadata_path, delimiter=',', usecols=5, unpack=True, autostrip=True, dtype=str, ndmin=1)
+            product_names = np.genfromtxt(metadata_path, delimiter=',', usecols=5, unpack=True, autostrip=True, dtype=str)
             
             # Remove quotes and whitespace from product names
             for p in np.arange(product_names.size):
@@ -323,12 +324,12 @@ class DataPreparer(object):
             
                 # Read in the metadata for this particular LROC NAC image (lat/lon coords in 0-360 domain)
                 em_angle, inc_angle, north_azim_angle, solar_azim_angle, sc_latitude, sc_longitude, u_r_lat, u_r_lon, l_r_lat, l_r_lon, l_l_lat, l_l_lon, u_l_lat, u_l_lon, centre_distance = np.genfromtxt(metadata_path, 
-                                                                                                                                                                                            delimiter=',',
-                                                                                                                                                                                            usecols=(58,59,61,62,65,66,71,72,73,74,75,76,77,78,80),
-                                                                                                                                                                                            skip_header=index, 
-                                                                                                                                                                                            max_rows=1, 
-                                                                                                                                                                                            dtype=float, 
-                                                                                                                                                                                            ndmin=1)
+                            delimiter=',',
+                            usecols=(58,59,61,62,65,66,71,72,73,74,75,76,77,78,80),
+                            skip_header=index, 
+                            max_rows=1, 
+                            dtype=float,
+                            ndmin=1)
             
                 # Calculate the min/max lat/lon from the coords of the 4 corners
                 max_latitude = max(u_r_lat, u_l_lat)
@@ -482,7 +483,7 @@ class DataPreparer(object):
 
         return true_shadow, true_bright
 
-    def save_shadow(self, shadow, geotransform, projection, h):
+    def save_shadow(self, main_shadow, filled_shadow, geotransform, projection):
 
         # Get product idenitification of the image from the filename
         name = os.path.splitext(self.filename)[0]
@@ -491,10 +492,10 @@ class DataPreparer(object):
         shadows_dir = os.path.join(self.output_dir, 'shadows/')
 
         # Define the output path to save the rasterised detected shadow to
-        output_path = os.path.join(shadows_dir, name + '_shadow.tif')
-
+        output_path = os.path.join(shadows_dir, name + '_main_shadow.tif')
+        
         # Rasterise the shadow mask and save as a geo-referenced GeoTiff
-        shadow_dataset = driver1.Create(output_path, shadow.shape[1], shadow.shape[0], 1, gdal.GDT_Int16)
+        shadow_dataset = driver1.Create(output_path, main_shadow.shape[1], main_shadow.shape[0], 1, gdal.GDT_Int16)
         
         # Set the geotransform and projection
         shadow_dataset.SetGeoTransform(geotransform)
@@ -502,10 +503,10 @@ class DataPreparer(object):
         
         # Write the NumPy array containing the shadow mask to the band of the raster dataset
         shadow_band = shadow_dataset.GetRasterBand(1)
-        shadow_band.WriteArray(shadow)
+        shadow_band.WriteArray(main_shadow)
         shadow_band.SetNoDataValue(np.nan)
         shadow_band.FlushCache()
-
+        
         # Define the output path to save the polygonised detected shadow to
         output_path = os.path.join(shadows_dir, name + '_shadow.shp')
 
@@ -516,14 +517,6 @@ class DataPreparer(object):
         # Create attribute to store the image's product name
         product = ogr.FieldDefn("prod_code", ogr.OFTString)
         shadow_layer.CreateField(product)
-        
-        # Create attribute to store the maximum apparent depth
-        max_h = ogr.FieldDefn("max_h", ogr.OFTReal)
-        shadow_layer.CreateField(max_h)
-        
-        # Create attribute to store the apparent depth at the shadow's centre
-        centre_h = ogr.FieldDefn("centre_h", ogr.OFTReal)
-        shadow_layer.CreateField(centre_h)
 
         # Polygonise the raster dataset into the shapefile layer
         gdal.Polygonize(shadow_band, shadow_band, shadow_layer, -1, [], callback=None)
@@ -547,10 +540,6 @@ class DataPreparer(object):
         # Fill in the product code field
         features.SetField("prod_code", name)
 
-        # Fill in the apparent depth fields
-        features.SetField("centre_h", h[int(h.size/2)])
-        features.SetField("max_h", np.amax(h))
-
         # Set the feature geometry
         features.SetGeometry(multipolygon)
             
@@ -560,6 +549,59 @@ class DataPreparer(object):
         # Close the datasets, bands and layers
         shadow_dataset = shadow_band = None
         shadow_layer = features = None
+        
+        # If bright features were detected
+        if filled_shadow is not None:
+            
+            # Define the output path to save the filled shadow to
+            filled_output_path = os.path.join(shadows_dir, name + '_filled_shadow.tif')
+        
+            # Rasterise the shadow mask and save as a geo-referenced GeoTiff
+            filled_shadow_dataset = driver1.Create(filled_output_path, filled_shadow.shape[1], filled_shadow.shape[0], 1, gdal.GDT_Int16)
+            
+            # Set the geotransform and projection
+            filled_shadow_dataset.SetGeoTransform(geotransform)
+            filled_shadow_dataset.SetProjection(projection)
+            
+            # Write the NumPy array containing the shadow mask to the band of the raster dataset
+            filled_shadow_band = filled_shadow_dataset.GetRasterBand(1)
+            filled_shadow_band.WriteArray(filled_shadow)
+            filled_shadow_band.SetNoDataValue(np.nan)
+            filled_shadow_band.FlushCache()
+
+            # Close the datasets
+            filled_shadow_dataset = filled_shadow_band = None
+            
+    def read_shadow(self, shadowtype):
+
+        # Get product idenitification of the image from the filename
+        name = os.path.splitext(self.filename)[0]
+        
+        # Define the path to the shadow mask
+        shadows_dir = os.path.join(self.output_dir, 'shadows/')
+        input_path = os.path.join(shadows_dir, name + f'_{shadowtype}.tif')
+        
+        # Open the shadow mask as a GDAL raster dataset
+        dataset = gdal.Open(input_path)
+        
+        # Get the number of bands in the shadow mask
+        n_bands = dataset.RasterCount
+        
+        if n_bands > 1:
+            raise ValueError("Shadow mask should be single-band")
+        
+        elif n_bands == 1:
+            
+            # Get the raster band of the shadow mask
+            band = dataset.GetRasterBand(1)
+            
+            # Read in the shadow mask as a NumPy array
+            shadow_array = band.ReadAsArray()
+        
+        else:
+            raise ValueError("No raster bands are present in shadow mask.")
+
+        return shadow_array
 
     def save_h_profile(self, L_obs, h_obs, pos_h_obs, neg_h_obs, L_true, h_true, pos_h_true, neg_h_true):
 
@@ -722,15 +764,11 @@ class ShadowTester(object):
     
     def __init__(self,
                 main_shadow,
-                true_shadow,
-                bright_features,
-                true_bright):
+                true_shadow):
         
         self.main_shadow = main_shadow
         self.true_shadow = true_shadow
-        self.bright_features = bright_features
-        self.true_bright = true_bright
-        
+    
     def calc_shadow_metrics(self):
         
         # Find all non-shadow detections
@@ -745,29 +783,6 @@ class ShadowTester(object):
         P = TP / (TP + FP)
         R = TP / (TP + FN)
         F1 = (2 * P * R)/ (P + R)
-        
-        return P, R, F1
-        
-    def calc_bright_metrics(self):
-        
-        # Find all non-bright features (shadow + background)
-        non_bright = np.where(self.true_bright == 1, 0, 1)
-        
-        # Calculate the true/false positives and false negatives for the bright features
-        TP = np.sum(self.bright_features * self.true_bright)
-        FP = np.sum(self.bright_features * non_bright)
-        FN = np.sum(self.true_bright) - np.sum(self.bright_features * self.true_bright)
-        
-        # Calculate the precision, recall and F1 scores
-        if TP == 0 and FP == 0:
-            P = np.nan
-        else:
-            P = TP / (TP + FP)
-        if TP == 0 and FN == 0:
-            R = np.nan
-        else:
-            R = TP / (TP + FN)
-        F1 = (2 * P * R) / (P + R)
         
         return P, R, F1
 
@@ -997,7 +1012,7 @@ class DepthCalculator(object):
         L_true = L_obs / np.cos(self.em_angle_perp)
 
         return S_true, L_true
-        
+    
     def calculate_h(self, S):
             
         # Find the angle between the Sun and the horizon
