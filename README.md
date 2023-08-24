@@ -1,6 +1,6 @@
 # The Pit Topography from Shadows (**PITS**) Tool
 ## Introduction
-The Pit Topography from Shadows (**PITS**) tool is a dockerised Python framework which can automatically calculate an apparent depth (*h*) profile for a Martian or Lunar pit from just a single cropped satellite image. These images can also be single- or multi-band. *h* is the relative depth of the pit between its rim and the edge of the shadow cast by the Sun - with the principle being that a deeper pit would cast a wider shadow. These *h* profiles can be used to assess which pits are the best candidate cave entrances on the Moon and Mars.
+The Pit Topography from Shadows (**PITS**) tool is a dockerised Python framework which can automatically calculate an apparent depth (*h*) profile for a Martian or Lunar pit from just a single cropped satellite image. These images can also be single- or multi-band. *h* is the relative depth of the pit between its rim and the edge of the shadow cast by the Sun - with the principle being that a deeper pit would cast a wider shadow. These *h* profiles can be used to assess which pits are the best candidate cave entrances on the Moon and Mars. If you'd like to learn more about PITS, you can head to the research paper titled ["Automatically calculating the apparent depths of pits using the Pit Topography from Shadows (PITS) tool"](https://academic.oup.com/rasti/article/2/1/492/7241547) and published by the Royal Astronomical Society's Techniques and Instruments (RASTI) journal in August 2023.
 
 ### What are pits?
 Pits, or pit craters, are near-circular depressions found in planetary surfaces which are generally formed through gravitational collapse. Pits will be primary targets for future space exploration and habitability for their presence on most rocky Solar System surfaces and their potential to be entrances to sub-surface cavities. This is particularly true on Mars, where caves are thought to harbour stable reserves of water ice across much of the surface - on which astronauts will also be exposed to high radiation dosages. There are two main catalogues for pits: the [Mars Global Cave Candidate Catalog (MGC<sup>3</sup>)](https://astrogeology.usgs.gov/search/map/Mars/MarsCaveCatalog/mars_cave_catalog) and the [Lunar Pit Atlas](http://lroc.sese.asu.edu/pits/list). Since pits are rarely found to have corresponding high-resolution elevation data, tools such as **PITS** are required for approximating their depths in order to find those which are the ideal candidates for exploration.
@@ -125,6 +125,10 @@ Run the [`PITS_plotter.py`](https://github.com/dlecorre387/Pit-Topography-from-S
 ![](https://github.com/dlecorre387/Pit-Topography-from-Shadows/blob/master/Apparent_Depth_Profile.png)
 
 **Figure 2** - Apparent depth (*h*) profile for the red version of the Mars Reconnaissance Orbiter (MRO) HiRISE image ESP_033342_1660 containing MGC<sup>3</sup> feature "APC071".
+
+## Citation Policy
+If you have used the PITS tool in your research, please cite the following:
+- Daniel Le Corre, David Mary, Nigel Mason, Jeronimo Bernard-Salas and Nick Cox, Automatically calculating the apparent depths of pits using the Pit Topography from Shadows (PITS) tool, RAS Techniques and Instruments, Volume 2, Issue 1, January 2023, Pages 492–509, https://doi.org/10.1093/rasti/rzad037
 
 ## Acknowledgements
 This project is part of the Europlanet 2024 RI which has received funding from the European Union’s Horizon 2020 research and innovation programme under grant agreement No 871149.
