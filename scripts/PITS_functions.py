@@ -1,6 +1,6 @@
 '''
 Created by Daniel Le Corre (1,2)* 
-Last edited on 07/07/2023
+Last edited on 22/09/2023
 1   Centre for Astrophysics and Planetary Science, University of Kent, Canterbury, United Kingdom
 2   Centres d'Etudes et de Recherches de Grasse, ACRI-ST, Grasse, France
 *   Correspondence: dl387@kent.ac.uk
@@ -14,6 +14,7 @@ programme under grant agreement No 871149.
 
 import os
 import numpy as np
+import matplotlib.pyplot as plt
 from osgeo import gdal, ogr
 from sklearn.cluster import *
 from sklearn.metrics import silhouette_samples
@@ -43,6 +44,7 @@ class DataPreparer(object):
                 input_dir,
                 metadata_dir,
                 labels_dir,
+                masks_dir,
                 testing_dir,
                 output_dir):
 
@@ -50,6 +52,7 @@ class DataPreparer(object):
         self.input_dir = input_dir
         self.metadata_dir = metadata_dir
         self.labels_dir = labels_dir
+        self.masks_dir = masks_dir
         self.testing_dir = testing_dir
         self.output_dir = output_dir
     
@@ -430,8 +433,57 @@ class DataPreparer(object):
         em_angle_par = np.arctan(v / d_h)
         em_angle_perp = np.arctan(u / d_h)
         
-        return inc_angle, solar_azim_angle, sc_azim_angle, phase_angle, em_angle, delta_em_angle, em_angle_par, em_angle_perp
+        return inc_angle, solar_azim_angle, sc_azim_angle, phase_angle, em_angle, delta_em_angle, em_angle_par, em_angle_perp, d_g, d_h
 
+    def read_pit_mask(self, n_bands, cropped_image, geotransform, projection):
+
+        # Get product identification of the image from the filename
+        name = os.path.splitext(self.filename)[0]
+
+        # Find the path to the mask of the pit's footprint
+        mask_path = os.path.join(self.masks_dir, name + '.shp')
+
+        # Open the shapefile layer
+        mask_dataset = ogr.Open(mask_path)
+        mask_layer = mask_dataset.GetLayer()
+
+        # Define the output path to save the rasterised mask shapefile to
+        output_path = os.path.join(self.output_dir,'mask_{}.tiff'.format(name))
+
+        # Create the raster data source to store the rasterised shadow shapefile
+        if n_bands == 1:
+            mask_raster_dataset = driver1.Create(output_path, cropped_image.shape[1], cropped_image.shape[0], 1, gdal.GDT_Int16)
+        elif n_bands > 1:
+            mask_raster_dataset = driver1.Create(output_path, cropped_image.shape[2], cropped_image.shape[1], 1, gdal.GDT_Int16)
+        else:
+            raise ValueError("Number of bands should not be zero.")
+        
+        # Set the geotransform and map-projection
+        mask_raster_dataset.SetGeoTransform(geotransform)
+        mask_raster_dataset.SetProjection(projection)
+        
+        # Get the raster band and assign the no data value
+        band = mask_raster_dataset.GetRasterBand(1)
+        band.SetNoDataValue(np.nan)
+        band.FlushCache()
+
+        # Rasterise the mask polygons so that you get a raster where 1=pit and 0=background
+        gdal.RasterizeLayer(mask_raster_dataset, [1], mask_layer, None, None, options=['ATTRIBUTE=id'], callback=None)
+        
+        # Close the raster dataset and band
+        mask_raster_dataset = band = None
+
+        # Read the rasterised mask data as an array
+        mask_array = gdal.Open(output_path).ReadAsArray()
+        
+        # Get the pixel mask of the footprint of the entire pit
+        mask = np.where(mask_array != 0, 1, 0)
+        
+        # Remove the temporary raster file
+        os.remove(output_path)
+
+        return mask
+    
     def read_ground_truth(self, n_bands, cropped_image, geotransform, projection):
 
         # Get product identification of the image from the filename
@@ -481,6 +533,83 @@ class DataPreparer(object):
         os.remove(output_path)
 
         return true_shadow, true_bright
+
+    def plot_shadows(self, solar_azim_angle, aligned_shadows, n_bands, cropped_image, coords, edges, rims):
+
+        # Get the product identification of the image from the filename
+        name = os.path.splitext(self.filename)[0]
+        
+        # Convert solar azimuth angle back to degrees and flip by 180
+        rotate_angle = (solar_azim_angle * (180 / np.pi)) - 180
+
+        # Set up figure with 2 axes if there were no bright features detected
+        if len(aligned_shadows) == 1:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10,5))
+
+            # Plot the aligned shadow as a binary mask
+            ax1.imshow(aligned_shadows[0], cmap='gray', aspect='equal', interpolation='none')
+            ax1.axis('off')
+            ax1.set_title("Aligned Shadow Mask")
+
+            # Rotate the cropped input image by the same angle to show the detected shadow edge and pit rim
+            if n_bands == 1:
+                rotated_image = rotate(cropped_image, rotate_angle, resize=True, order=0, mode='constant', cval=np.amax(cropped_image))
+            elif n_bands > 1:
+                image = cropped_image[0, :, :]
+                rotated_image = rotate(image, rotate_angle, resize=True, order=0, mode='constant', cval=np.amax(image))
+
+            # Plot the aligned cropped input image with the detected shadow edge and pit rim overlaid
+            ax2.imshow(rotated_image, cmap='gray', aspect='equal', interpolation='none')
+            ax2.plot(coords[0], edges[0], 'r-', linewidth=1, label='Shadow edge')
+            ax2.plot(coords[0], rims[0], 'c-', linewidth=1, label='Pit rim')
+            ax2.legend(loc='upper left', bbox_to_anchor=(0, 0), ncol=1, frameon=False)
+            ax2.axis('off')
+            ax2.set_title("Aligned Cropped Input Image")
+
+        # Set up figure with 2x2 grid of shadows if there were bright features
+        elif len(aligned_shadows) == 3:
+            fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(20,5))
+
+            # Plot the aligned shadow before any filling/filtering of bright features has taken place
+            ax1.imshow(aligned_shadows[0], cmap='gray', aspect='equal', interpolation='none')
+            ax1.axis('off')
+            ax1.set_title("Aligned Shadow Mask \n (Before Post-Processing)")
+
+            # Plot the aligned shadow after all holes due to bright features have been filled
+            ax2.imshow(aligned_shadows[1], cmap='gray', aspect='equal', interpolation='none')
+            ax2.axis('off')
+            ax2.set_title("Aligned Shadow Mask \n (Filled)")
+
+            # Plot the aligned shadow after all holes due to bright features have been filtered
+            ax3.imshow(aligned_shadows[2], cmap='gray', aspect='equal', interpolation='none')
+            ax3.axis('off')
+            ax3.set_title("Aligned Shadow Mask \n (Filtered)")
+        
+            # Rotate the cropped input image by the same angle to show the detected shadow edge and pit rim
+            if n_bands == 1:
+                rotated_image = rotate(cropped_image, rotate_angle, resize=True, order=0, mode='constant', cval=np.amax(cropped_image))
+            elif n_bands > 1:
+                image = np.average(cropped_image, axis=0).astype(int)
+                rotated_image = rotate(image, rotate_angle, resize=True, order=0, mode='constant', cval=np.amax(image))
+
+            # Plot the aligned cropped input image with the detected shadow edge and pit rim overlaid
+            ax4.imshow(rotated_image, cmap='gray', aspect='equal', interpolation='none')
+            ax4.plot(coords[0], edges[0], 'r--', linewidth=1, label='Shadow edge')
+            ax4.plot(coords[1], edges[1], 'r-', linewidth=1)
+            ax4.plot(coords[0], rims[0], 'c--', linewidth=1, label='Pit rim')
+            ax4.plot(coords[1], rims[1], 'c-', linewidth=1)
+            ax4.legend(loc='upper left', bbox_to_anchor=(0, 0), ncol=1, frameon=False)
+            ax4.axis('off')
+            ax4.set_title("Aligned Cropped Input Image")
+
+        else:
+            raise ValueError("Number of aligned shadows provided should be 1 or 3.")
+
+        # Define the path to where the plots should be saved
+        plots_dir = os.path.join(self.output_dir, 'figures/')
+        
+        # Save the figure to the plots directory
+        fig.savefig(os.path.join(plots_dir, name + '_shadows.pdf'), bbox_inches='tight')
 
     def save_shadow(self, shadow, geotransform, projection, h):
 
@@ -822,6 +951,14 @@ class DepthCalculator(object):
             # Rotate the binary shadow mask so that the Sun's line of sight passed from bottom to top
             aligned_shadow = rotate(shadow, azim_angle - 180, resize=True, order=0, mode='constant', cval=0, preserve_range=True)
 
+            # Remove any small shadows which have now been separated from the main shadow
+            labelled_shadow = label(aligned_shadow, background=0)
+            regions = regionprops(labelled_shadow)
+            region_areas = []
+            for region in regions:
+                region_areas.append(region.area)
+            aligned_shadow = np.where(labelled_shadow == (region_areas.index(max(region_areas))+1), 1, 0)
+            
             # Store the shadow
             aligned_shadows.append(aligned_shadow)
 
@@ -837,6 +974,9 @@ class DepthCalculator(object):
             raise ValueError("No aligned shadows were retrieved.")
 
     def remove_bright_features(self, aligned_main_shadow, aligned_filled_shadow):
+
+        # Make a copy of the aligned main shadow array
+        aligned_filtered_shadow = np.copy(aligned_main_shadow)
         
         # Find the difference between the filled and non-filled shadow masks to get the bright features
         difference = aligned_filled_shadow - aligned_main_shadow
@@ -846,8 +986,12 @@ class DepthCalculator(object):
         
         # Find the unique x coordinates of all bright features
         unique_xs = np.unique(coords[1])
+
+        # Find the difference between the unique x coordinates (to find individual bright regions)
+        diff = np.diff(unique_xs)
+        ind = np.insert(np.where(diff > 1)[0], 0, 0)
         
-        for unique_x in unique_xs:
+        for i, unique_x in enumerate(unique_xs):
             
             # Get the edge and rim of the aligned shadow
             edge = np.amin(np.where(aligned_filled_shadow[:, unique_x] == 1)[0])
@@ -863,22 +1007,22 @@ class DepthCalculator(object):
             
             # Remove the shadow pixels above or below depending on if it is nearer the edge or rim
             if shadow_centre > bright_centre:
-                aligned_main_shadow[:ymin, unique_x] = 0
+                aligned_filtered_shadow[:ymin, unique_x] = 0
             elif shadow_centre < bright_centre:
-                aligned_main_shadow[ymax:, unique_x] = 0
+                aligned_filtered_shadow[ymax:, unique_x] = 0
             else:
-                aligned_main_shadow[ymax:, unique_x] = 0
+                aligned_filtered_shadow[ymax:, unique_x] = 0
         
         # Remove any small shadows which have now been separated from the main shadow
-        labelled_mask = label(aligned_main_shadow, background=0)
+        labelled_mask = label(aligned_filtered_shadow, background=0)
         regions = regionprops(labelled_mask)
         region_areas = []
         for region in regions:
             region_areas.append(region.area)
-        aligned_main_shadow = np.where(labelled_mask == (region_areas.index(max(region_areas))+1), 1, 0)
+        aligned_filtered_shadow = np.where(labelled_mask == (region_areas.index(max(region_areas))+1), 1, 0)
         
-        return aligned_main_shadow
-
+        return aligned_filtered_shadow
+    
     def measure_shadow(self, aligned_shadow):
         
         # Find the pixel coordinates of the shadow edge and rim
@@ -888,17 +1032,35 @@ class DepthCalculator(object):
         edge = np.empty(length_coords.size)
         rim = np.empty(length_coords.size)
         
-        # Measure the observed shadow width at every point [in m]
+        # # Measure the observed shadow width at every point [in m]
+        # S_obs = np.zeros(aligned_shadow.shape[1])
+        # errors = []
+        # for e, l in enumerate(length_coords):
+        #     try:
+        #         edge[e] = np.amin(np.where(aligned_shadow[:, l] == 1)[0])
+        #         rim[e] = np.amax(np.where(aligned_shadow[:, l] == 1)[0])
+        #         S_obs[l] = self.resolution * np.abs(edge[e] - rim[e])
+        #     except:
+        #         errors.append(l)
+        #         S_obs[l] = 0
+        
+        # Measure the widest part of the shadow [in m]
         S_obs = np.zeros(aligned_shadow.shape[1])
         errors = []
         for e, l in enumerate(length_coords):
-            try:
-                edge[e] = np.amin(np.where(aligned_shadow[:, l] == 1)[0])
-                rim[e] = np.amax(np.where(aligned_shadow[:, l] == 1)[0])
-                S_obs[l] = self.resolution * np.abs(edge[e] - rim[e])
-            except:
-                errors.append(l)
-                S_obs[l] = 0
+            # try:
+            reshaped_shadow = aligned_shadow[:, l].reshape(1, -1)
+            labelled_width = label(reshaped_shadow, background=0)
+            regions = regionprops(labelled_width)
+            region_areas = []
+            for region in regions:
+                region_areas.append(region.area)
+            S_obs[l] = self.resolution * np.sum(np.where(labelled_width.reshape(-1) == (region_areas.index(max(region_areas)) + 1), 1, 0))
+            edge[e] = np.amin(np.where(labelled_width.reshape(-1) == (region_areas.index(max(region_areas)) + 1))[0])
+            rim[e] = np.amax(np.where(labelled_width.reshape(-1) == (region_areas.index(max(region_areas)) + 1))[0])
+            # except:
+            #     errors.append(l)
+            #     S_obs[l] = 0
         
         if len(errors) > 0:
             edge = np.delete(edge, np.array(errors))
@@ -1007,3 +1169,106 @@ class DepthCalculator(object):
         h = S * np.tan(horizon_angle)
 
         return h
+
+    def estimate_volume(self, mask, sc_azim_angle, d_g, d_h, S, h):
+        
+        # Label the mask to get the region properties
+        labelled_mask = label(mask, background=0)
+        regions = regionprops(labelled_mask)
+        
+        # Check that there is only one mask region
+        if len(regions) == 1:
+
+            # Get the estimated orientation, eccentricity and the major/minor axes of the pit's footprint
+            orientation = regions[0].orientation
+            eccentricity = regions[0].eccentricity
+            major_axis = regions[0].axis_major_length * self.resolution
+            minor_axis = regions[0].axis_minor_length * self.resolution
+
+        elif len(regions) == 0:
+            raise ValueError("No regions could be found in the pit footprint mask.")
+
+        else:
+            raise ValueError("Multiple regions found in the pit footprint mask")
+
+        # Convert the orientation to clockwise from North (originally anti-clockwise between the pit's major axis and North) 
+        if orientation > 0:
+            orientation = (2 * np.pi) - orientation
+        elif orientation < 0:
+            orientation = -1 * orientation
+
+        # Find the phase angle between the satellite looking direction and the orientation of the pit [in radians]
+        angle = max(orientation, sc_azim_angle) - min(orientation, sc_azim_angle)
+        
+        # Ensure phase angle is between 0 and 2 pi
+        if angle > np.pi:
+            angle = (2 * np.pi) - angle
+    
+        # Calculate the obliquity angles of the satellite parallel and perpendicular to the pit's orientation [in radians]
+        v = d_g * abs(np.cos(angle))
+        em_para = np.arctan(v / d_h)
+        u = d_g * np.sin(angle)
+        em_perp = np.arctan(u / d_h)
+        
+        # Correct the major and minor axis of the pit mask [in m]
+        major_axis = major_axis * np.cos(em_para)
+        minor_axis = minor_axis * np.cos(em_perp)
+
+        # Estimate the volume (assuming that the pit is cylindrical) [in m^3]
+        max_cylinder_volume = np.pi * (major_axis**2) * h
+        min_cylinder_volume = np.pi * (minor_axis**2) * h
+        cylinder_volume = np.pi * major_axis * minor_axis * h
+
+        # Find the phase angle between the satellite looking direction and the orientation of the pit [in radians]
+        angle = max(orientation, self.solar_azim_angle) - min(orientation, self.solar_azim_angle)
+        
+        # Ensure phase angle is between 0 and 2 pi
+        if angle > np.pi:
+            angle = (2 * np.pi) - angle
+
+        # Then get the smallest angle between major axis and Sun
+        if angle > np.pi / 2:
+            angle = np.pi - angle
+        
+        # Find the radial distance from the centre to the shadow's edge (assuming the pit is a hemi-ellipsoid) [in m]
+        r = minor_axis / np.sqrt(1 - (eccentricity * np.cos(angle))**2)
+        max_d = major_axis - S
+        min_d = minor_axis - S
+        d = r - S
+        
+        # Calculate the maximum depth of the pit (assuming it is a hemi-ellipsoid) [in m]
+        max_ellipsoid_depth = h / np.sqrt(1 - ((((max_d * np.cos(angle))**2) - ((max_d * np.sin(angle))**2)) / major_axis**2))
+        min_ellipsoid_depth = h / np.sqrt(1 - ((((min_d * np.cos(angle))**2) - ((min_d * np.sin(angle))**2)) / minor_axis**2))
+        ellipsoid_depth = h / np.sqrt(1 - ((d * np.cos(angle) / major_axis)**2) - ((d * np.sin(angle) / minor_axis)**2))
+
+        # Estimate the volume of the pit (assuming it is a hemi-ellipsoid) [in m^3]
+        max_ellipsoid_volume = (4/3) * np.pi * (major_axis**2) * max_ellipsoid_depth
+        min_ellipsoid_volume = (4/3) * np.pi * (minor_axis**2) * min_ellipsoid_depth 
+        ellipsoid_volume = (4/3) * np.pi * major_axis * minor_axis * ellipsoid_depth
+
+        # Pit can only be conical if the maximum shadow width is greater than the pit's radius
+        if S >= major_axis:
+
+            # Find the slope of the pit on the opposite side to the illumination direction [in radians]
+            max_slope = np.arctan(h / max_d)
+            min_slope = np.arctan(h / min_d)
+            slope = np.arctan(h / d)
+            
+            # Calculate the maximum depth of the pit (assuming it is conical) [in m]
+            max_conical_depth = major_axis * np.tan(max_slope)
+            min_conical_depth = minor_axis * np.tan(min_slope)
+            conical_depth = r * np.tan(slope)
+            
+            # Estimate the volume of the pit (assuming it is conical) [in m^3]
+            max_conical_volume = (1/3) * np.pi * (major_axis**2) * max_conical_depth
+            min_conical_volume = (1/3) * np.pi * (minor_axis**2) * min_conical_depth
+            conical_volume = (1/3) * np.pi * major_axis * minor_axis * max_conical_depth
+
+        else:
+
+            # Set the conical volumes to zero if the pit cannot be cone-shaped
+            max_conical_volume = 0
+            min_conical_volume = 0
+            conical_volume = 0
+            
+        return cylinder_volume, min_cylinder_volume, max_cylinder_volume, ellipsoid_volume, min_ellipsoid_volume, max_ellipsoid_volume, conical_volume, min_conical_volume, max_conical_volume

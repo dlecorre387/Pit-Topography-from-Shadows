@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from scipy.stats import mode
 from skimage.transform import rotate
+from skimage.measure import label, regionprops
 
 # Import PITS functions
 from PITS_functions import *
@@ -62,6 +63,10 @@ Optional Parameters:
 -t (--testing):     Calculate the precision, recall and F1 score of shadow pixel detections in each image 
                     using user-provided ESRI shapefile labels of the pit's shadow. 
                     (Default: False / Type: bool)
+
+-v (--volume):      Estimate the volume of the pit using user-provided ESRI shapefile labels of the pit's 
+                    footprint. Two estimates are made, assuming that the pit is bowl-shaped and conical. 
+                    (Default: False / Type: bool)
             
 -f (--factor):      The factor by which the cropped input image and labels will be down-scaled when
                     calculating the silhouette coefficients during shadow extraction. 
@@ -89,6 +94,7 @@ PARSER.add_argument("-c", "--cropping", action=argparse.BooleanOptionalAction, r
 PARSER.add_argument("-p", "--path", type=str, default='/data/', help = "Where is the directory to your input data? ['/path/to/data/']")
 PARSER.add_argument("-s", "--shadows", action=argparse.BooleanOptionalAction, default=False, help = "Should the detected aligned shadows be saved for reference? [--shadows|--no-shadows]")
 PARSER.add_argument("-t", "--testing", action=argparse.BooleanOptionalAction, default=False, help = "Have validation shapefiles been provided for all images to test shadow extraction? [--testing|--no-testing]")
+PARSER.add_argument("-v", "--volume", action=argparse.BooleanOptionalAction, default=False, help = "Should the volume of the pit be estimated? [--volume|--no-volume]")
 PARSER.add_argument("-f", "--factor", type=float, default=10, help = "Down-scaling factor for silhouette coefficient calculation [float]")
 ARGS = PARSER.parse_args()
 
@@ -102,6 +108,7 @@ def main(dataset,
         path,
         shadows,
         testing,
+        volume,
         factor,
         cluster_range,
         miss_rates,
@@ -115,6 +122,7 @@ def main(dataset,
     input_dir = os.path.join(path, 'input/')
     metadata_dir = os.path.join(path, 'metadata/')
     labels_dir = os.path.join(path, 'labels/')
+    masks_dir = os.path.join(path, 'masks/')
     testing_dir = os.path.join(path, 'testing/')
     output_dir = os.path.join(path, 'output/')
     
@@ -148,7 +156,7 @@ def main(dataset,
     logging.info(f"Sub-folders created.")
     
     # List all filenames to be analysed without .XML files
-    filenames = [file for file in os.listdir(input_dir) if not file.endswith('.xml')]
+    filenames = [file for file in os.listdir(input_dir) if not file.endswith('.xml') if not file.endswith('.txt')]
     
     logging.info(f"The following files will be analysed ({len(filenames)} in total):")
     for file_n, filename in enumerate(filenames):
@@ -182,6 +190,18 @@ def main(dataset,
         R_bright = np.empty(len(filenames))
         F1_bright = np.empty(len(filenames))
 
+    # Set up array for storing volumes
+    if volume:
+        cylinder_volumes = np.empty(len(filenames))
+        min_cylinder_volumes = np.empty(len(filenames))
+        max_cylinder_volumes = np.empty(len(filenames))
+        ellipsoid_volumes = np.empty(len(filenames))
+        min_ellipsoid_volumes = np.empty(len(filenames))
+        max_ellipsoid_volumes = np.empty(len(filenames))
+        conical_volumes = np.empty(len(filenames))
+        min_conical_volumes = np.empty(len(filenames))
+        max_conical_volumes = np.empty(len(filenames))
+
     # Open progress bar, store the silhouette coefficients/scores, and find the target k/F1
     pbar = tqdm(total=len(filenames) * cluster_range.size, desc='Progress')
     silhouettes = np.empty((len(filenames), len(cluster_range)))
@@ -195,6 +215,7 @@ def main(dataset,
                                 metadata_dir=metadata_dir,
                                 labels_dir=labels_dir,
                                 testing_dir=testing_dir,
+                                masks_dir=masks_dir,
                                 output_dir=output_dir)
         
         if cropping:
@@ -203,7 +224,7 @@ def main(dataset,
             cropped_image, resolution, min_longitude, max_longitude, min_latitude, max_latitude, geotransform, projection, n_bands, x_size, y_size = DataPrep.crop_image()
 
             # Retrieve sensing angles at time of acquisition [in radians]
-            inc_angle, solar_azim_angle, sc_azim_angle, phase_angle, em_angle, delta_em_angle, em_angle_par, em_angle_perp = DataPrep.read_metadata(dataset, min_longitude, max_longitude, min_latitude, max_latitude)
+            inc_angle, solar_azim_angle, sc_azim_angle, phase_angle, em_angle, delta_em_angle, em_angle_par, em_angle_perp, d_g, d_h = DataPrep.read_metadata(dataset, min_longitude, max_longitude, min_latitude, max_latitude)
             
         elif not cropping:
             
@@ -211,7 +232,7 @@ def main(dataset,
             cropped_image, resolution, geotransform, projection, n_bands, x_size, y_size = DataPrep.read_cropped_im()
 
             # Retrieve sensing angles at time of acquisition [in radians]
-            inc_angle, solar_azim_angle, sc_azim_angle, phase_angle, em_angle, delta_em_angle, em_angle_par, em_angle_perp = DataPrep.read_metadata(dataset, None, None)
+            inc_angle, solar_azim_angle, sc_azim_angle, phase_angle, em_angle, delta_em_angle, em_angle_par, em_angle_perp, d_g, d_h = DataPrep.read_metadata(dataset, None, None)
         
         # Store metadata in arrays for saving later (converting angles back to degrees)
         resolutions[i], inc_angles[i], solar_azim_angles[i], sc_azim_angles[i], em_angles[i] = resolution, inc_angle * (180 / np.pi), solar_azim_angle * (180 / np.pi), sc_azim_angle * (180 / np.pi), em_angle * (180 / np.pi)
@@ -351,22 +372,7 @@ def main(dataset,
             
             # Save the rotated image with the detected shadow edge and pit rim overlaid
             if shadows:
-                azim_angle = solar_azim_angle * (180 / np.pi)
-                fig, (ax1, ax2) = plt.subplots(1, 2)
-                ax1.imshow(aligned_shadow, cmap='gray', aspect='equal', interpolation='none')
-                ax1.axis('off')
-                ax1.set_title("Aligned Shadow Mask")
-                if n_bands == 1:
-                    rotated_image = rotate(cropped_image, azim_angle - 180, resize=True, order=0, mode='constant', cval=np.amax(cropped_image))
-                elif n_bands > 1:
-                    rotated_image = rotate(cropped_image[0, :, :], azim_angle - 180, resize=True, order=0, mode='constant', cval=np.amax(cropped_image[0, :, :]))
-                ax2.imshow(rotated_image, cmap='gray', aspect='equal', interpolation='none')
-                ax2.plot(coords, edge, 'r-', linewidth=1, label='Shadow edge')
-                ax2.plot(coords, rim, 'c-', linewidth=1, label='Pit rim')
-                ax2.axis('off')
-                ax2.legend(loc='upper left', bbox_to_anchor=(0, 0), ncol=2, frameon=False)
-                ax2.set_title("Aligned Cropped Input Image")
-                fig.savefig(os.path.join(plots_dir, os.path.splitext(filename)[0] + '.pdf'), bbox_inches='tight')
+                DataPrep.plot_shadows(solar_azim_angle, [aligned_shadow], n_bands, cropped_image, [coords], [edge], [rim])
             
             # Calculate the upper and lower bounds of the uncertainty in the observed shadow width [in m]
             pos_delta_S_obs = miss_rate * S_obs
@@ -411,24 +417,7 @@ def main(dataset,
             
             # Save the rotated image with the detected filtered/filled shadow edge and pit rim overlaid
             if shadows:
-                azim_angle = solar_azim_angle * (180 / np.pi)
-                fig, (ax1, ax2) = plt.subplots(1, 2)
-                ax1.imshow(aligned_filtered_shadow, cmap='gray', aspect='equal', interpolation='none')
-                ax1.axis('off')
-                ax1.set_title("Aligned Shadow Mask")
-                if n_bands == 1:
-                    rotated_image = rotate(cropped_image, azim_angle - 180, resize=True, order=0, mode='constant', cval=np.amax(cropped_image))
-                elif n_bands > 1:
-                    rotated_image = rotate(cropped_image[0, :, :], azim_angle - 180, resize=True, order=0, mode='constant', cval=np.amax(cropped_image[0, :, :]))
-                ax2.imshow(rotated_image, cmap='gray', aspect='equal', interpolation='none')
-                ax2.plot(coords_filled, edge_filled, 'r-', linewidth=1, label='Shadow edge (filled)')
-                ax2.plot(coords_filtered, edge_filtered, 'r--', linewidth=1, label='Shadow edge (filtered)')
-                ax2.plot(coords_filled, rim_filled, 'c-', linewidth=1, label='Pit rim (filled)')
-                ax2.plot(coords_filtered, rim_filtered, 'c--', linewidth=1, label='Pit rim (filtered)')
-                ax2.axis('off')
-                ax2.legend(loc='upper left', bbox_to_anchor=(0, 0), ncol=2, frameon=False)
-                ax2.set_title("Aligned Cropped Input Image")
-                fig.savefig(os.path.join(plots_dir, os.path.splitext(filename)[0] + '.pdf'), bbox_inches='tight')
+                DataPrep.plot_shadows(solar_azim_angle, [aligned_main_shadow, aligned_filled_shadow, aligned_filtered_shadow], n_bands, cropped_image, [coords_filled, coords_filtered], [edge_filled, edge_filtered], [rim_filled, rim_filtered])
                 
         # Calculate the observed apparent depth before correcting the shadow width [in m]
         h_obs = DepCalc.calculate_h(S_obs)
@@ -441,6 +430,15 @@ def main(dataset,
         
         # Calculate the true apparent depth now that the width has been corrected [in m]
         h_true = DepCalc.calculate_h(S_true)
+
+        # Estimate the volume of the pit
+        if volume:
+            
+            # Read in the mask of the pit's footprint
+            mask = DataPrep.read_pit_mask(n_bands, cropped_image, geotransform, projection)
+
+            # Produce three estimates of the pit's volume, assuming that it is either cylindrical, ellipsoidal, or conical
+            cylinder_volumes[i], min_cylinder_volumes[i], max_cylinder_volumes[i], ellipsoid_volumes[i], min_ellipsoid_volumes[i], max_ellipsoid_volumes[i], conical_volumes[i], min_conical_volumes[i], max_conical_volumes[i] = DepCalc.estimate_volume(mask, sc_azim_angle, d_g, d_h, np.amax(S_true), np.amax(h_true))
         
         # Propagate the uncertainties in S_obs and the emission angle to h_obs and h_true
         pos_delta_h_obs, neg_delta_h_obs, pos_delta_h_true, neg_delta_h_true = DepCalc.propagate_uncertainties(S_obs, pos_delta_S_obs, neg_delta_S_obs, delta_em_angle)
@@ -496,7 +494,32 @@ def main(dataset,
                 delimiter=',',
                 fmt='%s, %f, %f, %f, %f, %f, %f',
                 header='Image Name, P (Shadow), R (Shadow), F1 (Shadow), P (B Spots), R (B Spots), F1 (B Spots)')       
-        
+    
+    # Store the volume estimates of each pit
+    if volume:
+
+        # Store results and image information in a structured array
+        dt = np.dtype([('filename', 'U32'),
+                        ('cyl', float), ('max_cyl', float), ('min_cyl', float),
+                        ('ell', float), ('max_ell', float), ('min_ell', float),
+                        ('con', float), ('max_con', float), ('min_con', float)])
+        array = np.empty(len(filenames), dtype=dt)
+        array['filename'] = [os.path.splitext(filename)[0] for filename in filenames]
+        array['cyl'] = cylinder_volumes
+        array['max_cyl'] = max_cylinder_volumes
+        array['min_cyl'] = min_cylinder_volumes
+        array['ell'] = ellipsoid_volumes
+        array['max_ell'] = max_ellipsoid_volumes
+        array['min_ell'] = min_ellipsoid_volumes
+        array['con'] = conical_volumes
+        array['max_con'] = max_conical_volumes
+        array['min_con'] = min_conical_volumes
+        np.savetxt(os.path.join(output_dir, 'PITS_volumes.csv'), 
+            array,
+            delimiter=',',
+            fmt='%s, %f, %f, %f, %f, %f, %f, %f, %f, %f',
+            header='Image Name, Cylindrical [m^3], Max, Min, Ellipsoidal [m^3], Max, Min, Conical [m^3], Max, Min')
+
     # Store results and image information in a structured array
     dt = np.dtype([('filename', 'U32'),
                     ('res', float), ('inc', float), ('s_azim', float), ('em', float), ('sc_azim', float),
@@ -549,6 +572,7 @@ if __name__ == "__main__":
         ARGS.path,
         ARGS.shadows,
         ARGS.testing,
+        ARGS.volume,
         ARGS.factor,
         CLUSTER_RANGE,
         MISS_RATES,
